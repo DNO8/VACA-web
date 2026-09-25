@@ -10,7 +10,9 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:stellar-contracts": "playwright test tests/e2e/stellar-contracts.spec.ts",
-    "test:stellar-testnet": "playwright test --config playwright.testnet.config.ts"
+    "test:stellar-testnet": "playwright test --config playwright.testnet.config.ts",
+    "test:proof-of-aid": "cargo test --manifest-path soroban/Cargo.toml",
+    "build:proof-of-aid": "stellar contract build --manifest-path soroban/Cargo.toml --locked"
   },
   "dependencies": {
     "@stellar/freighter-api": "^6.0.1",
