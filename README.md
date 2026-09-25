@@ -105,7 +105,7 @@ node scripts/build-regions.mjs   # escribe public/chile-regions.geojson
 - **Cuentas multifirma 2-de-2 por evento** 
 - **Ballots on-chain (`manageData`)** para validación comunitaria de señales
 - **Verdad emergente / confianza progresiva (Diapositivas 2–4)** (gating del Aid Layer)
-- **Contrato Soroban de Proof of Aid** pendiente (hoy el Proof of Aid usa primitivas nativas).
+- **Contrato Soroban de Proof of Aid** desplegado en Testnet: mock NFT no transferible con beneficiario, hashes de incidente/claim/imagen y evento verificable. La imagen vive localmente; no se declara IPFS.
 
 > [!IMPORTANT]
 > Las llaves del modo demo son **solo Testnet** (sin valor real). La arquitectura objetivo es
@@ -174,6 +174,8 @@ VACA opera bajo una **sostenibilidad híbrida**:
 - `src/lib/vote.ts` — voto comunitario on-chain (`manageData` + verificación Horizon).
 - `src/lib/vaquitas.ts` — feed público de señales vía `vaquita-feed`.
 - `src/lib/donate.ts` / `claim.ts` — donación y reclamo (claimable balances).
+- `src/lib/proof-of-aid.ts` — evidencia del mock NFT Soroban desplegado en Testnet.
 - `src/lib/i18n.tsx` — diccionario ES/EN + `LangProvider`.
 - `src/lib/chile.ts` — datos simulados de catástrofes y necesidades por región.
+- `soroban/contracts/proof-of-aid/` — contrato y pruebas del registro Proof of Aid.
 - `public/chile-regions.geojson` — límites de las regiones (fuente: jlhonora/geo).

@@ -58,7 +58,13 @@ test.describe('V.A.C.A. — flujo de la demo', () => {
 
     // 5 · Liberar 2-de-2 + Proof of Aid
     await page.getByRole('button', { name: /Liberar y entregar ayuda/i }).click();
-    await expect(page.getByText(/Proof of Aid registrado/i)).toBeVisible();
+    const proof = page.getByRole('article', { name: 'Proof of Aid mock NFT' });
+    await expect(proof).toBeVisible();
+    await expect(proof.getByText(/sin IPFS/i)).toBeVisible();
+    await expect(proof.getByRole('link', { name: /Ver mint/i })).toHaveAttribute(
+      'href',
+      /a8c14a0dbf0b712622454861df07a9f8104bae80d0227fa22e1c04de2b0e3509/,
+    );
 
     // Registro de transacciones (dashboard de transparencia)
     await expect(page.getByText(/Transacciones/i)).toBeVisible();

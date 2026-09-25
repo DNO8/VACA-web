@@ -32,6 +32,7 @@ import {
   explorerTx,
   explorerAccount,
 } from '@/lib/stellar';
+import ProofOfAidCard from './ProofOfAidCard';
 
 export interface TxEntry {
   label: string;
@@ -352,14 +353,17 @@ export default function RegionPanel({
           Balance → el beneficiario reclama. Genera la prueba de entrega.
         </p>
         {claimedTx ? (
-          <a
-            href={explorerTx(claimedTx)}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center justify-center gap-2 rounded-md border border-[rgba(0,230,118,0.4)] bg-[rgba(0,230,118,0.1)] py-2 text-[12px] font-semibold text-[var(--alert-green)]"
-          >
-            <CheckCircle2 size={14} /> Proof of Aid registrado <ExternalLink size={12} />
-          </a>
+          <div className="space-y-3">
+            <a
+              href={explorerTx(claimedTx)}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center justify-center gap-2 rounded-md border border-[rgba(0,230,118,0.4)] bg-[rgba(0,230,118,0.1)] py-2 text-[12px] font-semibold text-[var(--alert-green)]"
+            >
+              <CheckCircle2 size={14} /> Ayuda reclamada en Stellar <ExternalLink size={12} />
+            </a>
+            <ProofOfAidCard />
+          </div>
         ) : (
           <button
             onClick={handleRelease}
