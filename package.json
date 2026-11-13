@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "test:e2e": "playwright test",
+    "test:d1": "playwright test --config playwright.d1.config.ts",
     "test:e2e:ui": "playwright test --ui",
     "test:stellar-contracts": "playwright test tests/e2e/stellar-contracts.spec.ts",
     "test:stellar-testnet": "playwright test --config playwright.testnet.config.ts",
