@@ -97,3 +97,28 @@ Amounts are positive canonical strings with seven decimal places and at most twe
 | `d1_receipt_binding_mismatch` | Structurally valid receipt differs from original identity/economics or original deadline |
 
 This is **binding to caller-retained evidence, not independent authentication** of that evidence, administrator authority or blockchain provenance. No IO, retries, settlement, claim/refund status or current availability interpretation is added. Issuance/reconciliation parsers, durable handoff and UI remain later units. Focused offline check: `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/preparation-receipt.spec.ts --max-failures=0`.
+
+## T2b dependent unit: historical issuance and reconciliation
+
+`src/lib/d1/issuance-receipt.ts` now exports `parseIssuanceReceipt(status, raw, expectedContext, knownTransactionHash?)` and `parseReconciliationReceipt(status, raw, expectedContext, knownTransactionHash?)`. Supply the numeric HTTP status, decoded unknown data and original retained context above. Both return independent deeply frozen `{receipt, transactionHashBinding}` copies without freezing or mutating caller data. This adds the parsers deferred in the foundation section, not durable handoff or UI.
+
+| HTTP / parser | Exact wire fields and literals |
+| --- | --- |
+| 202 / issue | `state: 'pending'`, `verification: 'unverified'`, `requestId`, `transactionHash` |
+| 200 / issue | `state: 'issuance_observed'` or `'issuance_failed_observed'`, `verification: 'persisted_sdk_observation'`, `requestId`, `transactionHash`, `donor`, `beneficiary`, `asset`, `amount`, `paymentTransactionHash`, `deadline` |
+| 202 / reconcile | `state: 'reconciliation_progress'`, `requestId`, `transactionHash`, `stage: 'discovery'` or `'transactions'`; **no verification field** |
+| 200 / reconcile | `state: 'issuance_outcome_recorded'`, `requestId`, `transactionHash`, `outcome: 'success'` or `'failed'` (string, not journal object); **no verification field** |
+
+Issue success additionally requires `claimableBalanceId` matching `/^00000000[0-9a-f]{64}$/`: full 72-character lowercase XDR with the zero discriminant, not a 64-character hash. Only success permits optional enumerable `availability`; its value and descendants are **never evaluated**, even for an accessor or circular object, and it is omitted from output. No current presence, absence or claimability is inferred. Failure must omit both fields. All other fields must be own enumerable data in exact plain-object shapes; unknown/hidden/symbol fields, arrays, accessors and coercion are rejected.
+
+Both parsers bind `requestId` to the original UUID. Issue 200 additionally binds donor/asset/payment hash to the original payment, beneficiary to the retained beneficiary, amount to **context.amount** (1 allocated from 10 paid is valid), and deadline to original confirmation +300 seconds in canonical UTC ISO whole-second text. It never renews time. Reconcile has no economics and cannot independently assert them. Namespace, pool, administrator, incident and original payment mapping must remain externally retained; they are not invented as echoed receipt fields. Incident IDs and claimable-balance IDs never replace the UUID; the original payment hash is not the issuance transaction hash.
+
+`knownTransactionHash` is optional because issue's empty command cannot prebind the hash first generated/exposed after backend submission. If omitted, local wrapper metadata is `transactionHashBinding: 'first_report'`; if supplied it must be 64 lowercase hex characters and match exactly, yielding `'retained_match'`. These labels are **local provenance**, never new wire fields. Neither first report nor retained match authenticates the backend or proves cryptographic provenance/inclusion.
+
+| Stable `Error.message` | Rejection |
+| --- | --- |
+| `d1_invalid_receipt_context` | Invalid original context or malformed supplied issuance hash; checked before receipt parsing |
+| `d1_malformed_issuance_receipt` / `d1_malformed_reconciliation_receipt` | Wrong HTTP/status pairing, wire shape, literals or primitive encoding |
+| `d1_receipt_binding_mismatch` | Well-formed receipt differs from original request, supplied issuance hash or issue economics/deadline |
+
+These pure helpers perform no IO, polling, retries, re-signing or time renewal. Pending is unverified; reconciliation success is not settlement; observed failure is not refund or retry permission; a lost response never authorizes resubmission. Independent verification, durable receipt storage, UI, deployment and live financial acceptance remain separate. Focused offline check: `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/issuance-receipt.spec.ts --max-failures=0`.
