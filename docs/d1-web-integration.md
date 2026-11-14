@@ -200,3 +200,24 @@ Existing pure validation errors listed above propagate for invalid intent/parame
 **Limits:** structural/cryptographic binding is not authentication of UUID/namespace against a wholly replaced record by malicious same-origin code. Those fields remain external metadata, not transaction-signed identity. Concurrent explicit sign calls may prompt more than once, but their unsigned body is already fixed and the journal retains only one signed byte set. Only the journal's atomic submission claim can provide the later coordinator's one-send guard; this session never claims or sends. No current ledger/account-threshold authority, extension interoperability, cross-device exclusion, inclusion, payment completion or settlement is proved.
 
 Focused Node-only check: `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/donation-session.spec.ts --max-failures=0`. Tests use synthetic SDK Ed25519 signatures and an injected signer with a bounded fake journal to check orchestration effects, not IndexedDB atomicity. **No actual wallet interaction, network submission or financial action is executed by these tests.** Existing real-browser journal evidence is separate; independent verification and full-suite acceptance remain parent-owned.
+
+## T3 transport: explicit one-shot submission, never payment confirmation
+
+`submitDonation(journal, expectedIntent, fetcher?)` in `src/lib/d1/donation-submission.ts` sends only when explicitly called. Importing the module, opening a journal or reading a donation never sends. The optional fetch defaults to browser fetch; tests always inject a synthetic implementation. No UI invokes this API yet, and live financial execution still requires separate authorization.
+
+1. Validate the callable fetcher, then use `readDonation` to validate the full original intent, canonical snapshot and actual donor signature. Missing or unsigned records reject. Already claimed records return without claiming or sending.
+2. Await `claimSubmission(originalUUID, JSON.stringify(validatedSignedSnapshot))`. Validate the exact plain acknowledgement and its scope, UUID, canonical unsigned/signed bytes and `submission_claimed` state. Only a valid `claimed: true` winner sends. This is wrapper defense, not authentication against malicious same-origin replacement.
+3. POST exactly once to `https://horizon-testnet.stellar.org/transactions`, with no destination override, credentials, redirects, cache or referrer. The form body has only `tx`: the exact retained signed XDR, including whitespace. No UUID, namespace or wallet key is added.
+4. Bound network awaiting with a fixed **10,000 ms** deadline and AbortController, even if an injected fetch ignores abort. Always clear the timer; discard response bodies without parsing or awaiting cancellation, including late responses. Consume late rejections. Never retry, re-sign, renew identity/body, reset or release the claim.
+
+| Frozen `DonationSubmission` result | Meaning |
+| --- | --- |
+| `response_unverified`, with integer `httpStatus` 100–599 | HTTP metadata only. 2xx, 4xx and 5xx prove neither inclusion, failure, settlement nor refund authorization. |
+| `unknown` | Timeout, abort, network throw or invalid response; the durable claim remains occupied. |
+| `already_claimed` | No fetch; a prior claim or concurrent winner owns the attempt. No HTTP status is retained. |
+
+Every result carries the original `requestId` and retained `transactionHash`. **Every post-claim outcome leaves the record `submission_claimed`**, including an error acknowledgement after persistence. Explicit repeat/reload never permits another send. The API does not save a response or create ledger evidence.
+
+Pre-transport failures reject: existing session/pure validation errors propagate; new typed `DonationSubmissionError.code` values are `invalid_fetcher`, `not_found`, `unsigned`, `storage_error` (claim operation rejected), and `invalid_claim` (malformed or mismatched acknowledgement). Their stable messages are `d1_submission_<code>`, never raw storage/network payloads. A rejection is not permission to retry: storage or acknowledgement failure may follow an already durable claim. After a validated winning claim, transport failures return `unknown` instead of throwing raw fetch details.
+
+Focused offline command: `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/donation-submission.spec.ts --max-failures=0`. Node-only tests use real synthetic SDK signatures and a public fake journal adapter; one actual 10-second deadline case checks abort-ignoring fetch and late completion. This does not replace real-browser atomic journal evidence. Original-hash observation/recovery, UI, cross-device exclusion and live payment acceptance remain unfinished; this unit does not complete T3.
