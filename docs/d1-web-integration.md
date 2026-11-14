@@ -122,3 +122,28 @@ Both parsers bind `requestId` to the original UUID. Issue 200 additionally binds
 | `d1_receipt_binding_mismatch` | Well-formed receipt differs from original request, supplied issuance hash or issue economics/deadline |
 
 These pure helpers perform no IO, polling, retries, re-signing or time renewal. Pending is unverified; reconciliation success is not settlement; observed failure is not refund or retry permission; a lost response never authorizes resubmission. Independent verification, durable receipt storage, UI, deployment and live financial acceptance remain separate. Focused offline check: `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/issuance-receipt.spec.ts --max-failures=0`.
+
+## T3 foundation: immutable donation transaction and personal signature
+
+`src/lib/d1/donation-transaction.ts` is a **pure offline boundary**, not a wallet invocation, store or submission flow. It imports no legacy donation/pool orchestration and retains no secret material. All returned records are independent, deeply frozen plain data; caller objects are neither mutated nor frozen, including on rejection.
+
+1. `createDonationIntent(config, {request_id, donor, incident_id, asset, amount})` retains the original UUID and matching public TESTNET config, including namespace and TTL 300. `validateDonationIntent(value)` validates the complete `{config, request_id, donor, incident_id, asset, amount}` shape. Both reuse the strict T2 readers: exact fields, checksum-valid Ed25519 accounts, lowercase UUIDs, full 1–256-character printable ASCII incident without edge whitespace, explicit native or issued asset. No normalization, issuer selection or UUID generation occurs. Positive canonical seven-decimal amounts additionally fit signed64 stroops: maximum `922337203685.4775807`.
+2. `buildDonationTransaction(intent, {sequence, fee, timebounds: {minTime, maxTime}})` returns a frozen `DonationTransaction`: `{intent, parameters, unsignedXdr, transactionHash}`. Supply the current account sequence as a canonical unsigned decimal string `0`–`9223372036854775806`; a new local SDK Account alone is incremented. Fee is a positive canonical decimal stroop string up to `4294967295`, for exactly one operation; sufficient network fee/funding is not asserted. Time bounds are explicit safe-integer epoch seconds, `0 <= minTime < maxTime <= Number.MAX_SAFE_INTEGER`; zero/infinite max is forbidden. No clock, default timeout or renewal is used.
+3. After a **separately authorized** personal Freighter interaction, call `validateSignedDonation(buildSnapshot, {signedTxXdr, signerAddress, error?})`. It returns a frozen `SignedDonation` with the original build fields plus the **exact returned** `signedTxXdr`, not a reconstructed envelope. It never invokes a wallet, signs, sends, retries or stores anything.
+
+The ordinary v1 transaction contains exactly one Payment with explicit donor source, retained pool destination, asset and amount, using `Networks.TESTNET`. Memo is `Memo.hash(SHA256(UTF8('vaca.d1.donation.v1\n' + exactFullIncidentId)))`, never legacy `vq:` text or a truncated incident. **Transaction time bounds are not financial expiry**: D1 expiry remains original payment confirmation +300 seconds in later evidence handling, never build/sign/retry time.
+
+The signed validator reconstructs the unsigned transaction from strictly validated intent/parameters and checks stored unsigned XDR/hash before comparing the signed transaction's full signature base and hash. JSON-reloaded snapshots are supported; no process-local trust marker is needed. Fee-bump and v0 envelopes are unsupported. A matching signer string is insufficient: at least one decorated signature must verify with the donor's Ed25519 public key over the TESTNET transaction hash. Non-null wallet errors (including `false`) reject. This is **direct donor key proof**, not generalized multisig/account-threshold authorization, current ledger authorization, inclusion or settlement. Additional signatures do not establish those claims.
+
+| Stable `Error.message` | Rejection |
+| --- | --- |
+| `d1_invalid_donation_intent` | Malformed intent/config/identity/asset, nonpositive or overflowing amount |
+| `d1_invalid_donation_parameters` | Invalid sequence/fee/time bounds or SDK build failure |
+| `d1_invalid_donation_snapshot` | Invalid retained build record or unsigned XDR/hash inconsistent with its intent/parameters |
+| `d1_wallet_error` / `d1_signer_mismatch` | Malformed/error wallet response / absent or different signer address |
+| `d1_invalid_signed_donation` | Malformed signed XDR or unsupported envelope |
+| `d1_donation_body_mismatch` / `d1_invalid_signature` | Different transaction body / no valid direct donor signature |
+
+The snapshot binds data internally, not to authenticated storage: replacing the entire caller-retained record cannot be detected without external retention. UUID and namespace are retained metadata, not fields authenticated by the payment signature. Durable storage, atomic cross-tab acquisition enforcing **one unresolved donation per wallet/config/incident**, submission and exact-hash recovery remain later T3 units. A timeout never permits a new send. UI, browser/extension interoperability and live financial acceptance remain unimplemented/unproved here.
+
+Focused offline check: `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/donation-transaction.spec.ts --max-failures=0`.
