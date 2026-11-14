@@ -68,7 +68,7 @@ Only 64-byte `Uint8Array`/Buffer or strict canonical standard-base64 strings are
 
 ## Offline verification
 
-Run `pnpm test:d1` or `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts`. This separate configuration runs only `tests/d1/**/*.spec.ts` and the existing `tests/e2e/stellar-contracts.spec.ts`, without a server, browser launch or live Testnet. It uses mock credentials and injected fetch, zero retries, fail-fast reporting, and unique operating-system temporary output directories. Follow with `node node_modules/typescript/bin/tsc --noEmit --incremental false` for type checking.
+Run `pnpm test:d1` or `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts`. This separate configuration runs only `tests/d1/**/*.spec.ts` and the existing `tests/e2e/stellar-contracts.spec.ts`, without a server or live Testnet. The journal tests additionally require sandboxed local Chromium (see below); the other tests do not launch a browser. It uses mock credentials and injected fetch, zero retries, fail-fast reporting, and unique operating-system temporary output directories. Follow with `node node_modules/typescript/bin/tsc --noEmit --incremental false` for type checking.
 
 Review the boundary in `src/lib/d1/server-proxy.ts`, the thin Next 15 Promise-params adapter in `src/app/api/d1/[action]/route.ts`, and the observable contract in `tests/d1/proxy.spec.ts`. Existing donation/admin/Stellar helpers are unchanged. T2a's focused checks are `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/commands.spec.ts tests/d1/wallet-proof.spec.ts tests/d1/independent-commands.spec.ts --max-failures=0`. The independent probes use Node crypto as a separate Ed25519 signing oracle. Payment intent, receipts, UI, phone coordination and live financial journeys are later tasks.
 
@@ -147,3 +147,31 @@ The signed validator reconstructs the unsigned transaction from strictly validat
 The snapshot binds data internally, not to authenticated storage: replacing the entire caller-retained record cannot be detected without external retention. UUID and namespace are retained metadata, not fields authenticated by the payment signature. Durable storage, atomic cross-tab acquisition enforcing **one unresolved donation per wallet/config/incident**, submission and exact-hash recovery remain later T3 units. A timeout never permits a new send. UI, browser/extension interoperability and live financial acceptance remain unimplemented/unproved here.
 
 Focused offline check: `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/donation-transaction.spec.ts --max-failures=0`.
+
+## T3 journal: one retained intent and one durable submission claim
+
+`src/lib/d1/donation-journal.ts` adds **IndexedDB persistence only**, with no runtime imports. It does not parse JSON/XDR, validate economics or signatures, invoke a wallet, submit, retry, release, reset or infer settlement. A later coordinator must validate actual `DonationIntent`/`SignedDonation` objects **before storage and after reading**, retaining their original identity. A structurally valid stored envelope is not authenticated donation evidence.
+
+1. `openDonationJournal(indexedDB, name)` opens database version 1; choose a fixed application database name. There is no volatile fallback or destructive migration.
+2. `acquire(scope, requestId, intent)` returns frozen `{acquired, record}`. The caller supplies the original lowercase UUID and a fixed, unambiguous scope derived from validated **network/pool/namespace/donor/incident**, excluding amount and asset. The store's UUID primary key and unique scope index arbitrate independent connections. A competing UUID/amount receives the original record, not a replacement. The same UUID/exact scope/intent is idempotent (`acquired: false`); UUID reuse with a different scope or intent rejects.
+3. `saveSigned(requestId, expectedIntent, signed)` stores the exact opaque signed string only against the exact original intent. An identical signed string is idempotent, including after a claim; a different string cannot replace it. It returns the retained record.
+4. `claimSubmission(requestId, expectedSigned)` atomically changes `signed` to `submission_claimed`, returning frozen `{claimed, record}`. Exactly one caller wins. Later calls return `claimed: false`; close/reopen/reload does not grant another claim. This is **not submission or inclusion evidence**. A crash after claiming may mean nothing was sent, but uncertainty never authorizes a resend in this unit.
+5. `read(requestId)` returns a frozen independent record or `null`; `close()` is idempotent. Records contain exactly `{scope, requestId, intent, state}`, plus `signed` only in `signed`/`submission_claimed` states. No timestamps, counters or UUIDs are generated.
+
+Every mutation reads, compares and writes inside one IndexedDB readwrite transaction with strict durability requested; success is exposed **only on transaction completion**, never request success. Rejected guards and aborted transactions leave stored data unchanged. Version changes close the connection; blocked/error opens reject, and late successful opens are closed. Name/scope limits are 1–256/1–4096 UTF-16 code units; intent/signed strings are 1–1,048,576 code units, preserved exactly without normalization. UUIDs require canonical lowercase 8-4-4-4-12 hex syntax. Records are structurally validated before use. No release API exists yet, so a scope remains occupied even after a claim.
+
+| Stable `Error.message` | Meaning |
+| --- | --- |
+| `d1_journal_invalid_argument` | Invalid primitive, UUID or string length |
+| `d1_journal_unavailable` | No usable supplied IndexedDB factory; never falls back to memory |
+| `d1_journal_blocked` / `d1_journal_open_failed` | Blocked open / platform, schema or version failure |
+| `d1_journal_closed` / `d1_journal_storage_error` | Closed connection / transaction failure or abort |
+| `d1_journal_invalid_record` | Stored envelope shape, identity or state is malformed |
+| `d1_journal_conflict` | UUID binding conflict or replacement signed payload |
+| `d1_journal_not_found` / `d1_journal_guard_mismatch` / `d1_journal_invalid_state` | Missing record / original bytes differ / claim attempted before signing |
+
+**Browser proof:** `tests/d1/donation-journal.spec.ts` transpiles only this standalone module and exercises its public API in real Chromium: independent-page acquisition and claim races, exact bytes, immutable snapshots, invalid guards, durable close/reopen/reload and closed connections. Thin factory fault injection tests real transaction abort after request success and invalid envelopes; synthetic open lifecycle tests are not concurrency proof. The runner uses fresh browser contexts, blocked service workers, an inline-only `http://d1-test.local/` route and aborts other page requests. No server, personal profile, wallet or live financial call is used. Missing browser/runtime prerequisites fail rather than skip.
+
+Run `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/donation-journal.spec.ts --max-failures=0`, with process-scoped `D1_TEST_BROWSER` pointing to the prepared Chromium executable (or `PLAYWRIGHT_BROWSERS_PATH` for Playwright's installed executable resolution). Any prepared local runtime libraries belong only in process-scoped `LD_LIBRARY_PATH`. Chromium runs with `chromiumSandbox: true`; do not disable the sandbox. Follow with `node node_modules/typescript/bin/tsc --noEmit --incremental false`.
+
+This enforces uniqueness only within the **same browser origin/database** and caller-consistent scope. It does not protect against storage eviction/deletion, malicious same-origin code, a different browser/device or a wholly replaced valid record. Coordinator integration, cross-device authority, actual submission, exact-hash recovery, UI and live payment acceptance remain separate T3+ work; this journal does not complete T3.
