@@ -1,4 +1,4 @@
-# D1 same-origin custody transport
+# D1 custody transport and command validation
 
 T1 adds a server-only transport to the existing D1 backend, not a replacement backend or a payment UI. No official wallet is needed to configure or test this transport. Provisional personal wallets remain a separate integration concern; this unit never signs, pays, issues automatically, or handles pool secrets.
 
@@ -38,10 +38,34 @@ There is exactly one upstream fetch attempt, with a **10-second abort deadline**
 | 502 | `upstream_unavailable`, `invalid_upstream_response` |
 | 504 | `upstream_timeout` |
 
+## T2a: command construction
+
+The browser-safe `src/lib/d1/commands.ts` adds **offline command validation and serialization only**, without importing the server proxy. It does not sign or submit commands, create pools, retain state, decode receipts or change the existing donation/admin flows.
+
+1. Supply matching public configuration from `/api/d1/config`: exactly `network`, `pool_public_key`, `namespace`, `donation_ttl_seconds`. `validateD1Config(config)` validates and freezes a copy; deployment matching remains the operator's responsibility.
+2. Call `buildD1Command(config, {action, request_id, timestamp, wallet, payload}, clock?)`. The caller chooses the lowercase UUID request ID and Unix-seconds timestamp **once**. The optional clock returns safe-integer Unix seconds; default is `Math.floor(Date.now()/1000)`. `validateD1Command(config, unknownCommand, clock?)` also accepts complete unsigned wire commands and returns a deeply frozen snapshot.
+
+| Command | Exact unsigned fields | Payload |
+| --- | --- | --- |
+| `prepare` | `version`, `network`, `pool`, `action`, `request_id`, `timestamp`, `payload`, `wallet` (**no namespace**) | Exactly `incident_id`, `transaction_hash`, `operation_id`, `beneficiary`, `amount`, all strings |
+| `issue`, `reconcile` | Those eight fields plus matching lowercase UUID `namespace` | Empty object |
+
+Version is `1`, network is `TESTNET`, and pool/namespace come only from the supplied config. Stellar addresses must be checksum-valid Ed25519 accounts. Incident IDs are 1–256 printable ASCII characters without edge whitespace, not necessarily UUIDs. Transaction hashes are 64 lowercase hex characters; operation IDs match `[1-9][0-9]{0,18}`; amounts match `(0|[1-9][0-9]{0,11})\.[0-9]{7}`. These strings are never normalized or converted to floating point. Timestamps must be within the inclusive ±60-second window at validation.
+
+`canonicalUnsignedJson(validatedCommand)` recursively sorts object keys, preserves array order, and excludes the top-level signature; it is a serializer, not an input validator. Valid command payloads contain no arrays. Personal signing and proof verification are a separate dependent unit.
+
+| Stable `Error.message` | Rejection |
+| --- | --- |
+| `d1_invalid_config` | Invalid public configuration |
+| `d1_invalid_command` | Invalid/extra/missing fields, mismatched configuration, invalid timestamp or clock |
+| `d1_stale_command` | Timestamp outside the allowed window |
+
+Personal proofs, receipt validation (T2b), durable payments, UI/orchestration (T3–T5), browser/runtime checks and live journeys remain separate work.
+
 ## Offline verification
 
 Run `pnpm test:d1` or `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts`. This separate configuration runs only `tests/d1/**/*.spec.ts` and the existing `tests/e2e/stellar-contracts.spec.ts`, without a server, browser launch or live Testnet. It uses mock credentials and injected fetch, zero retries, fail-fast reporting, and unique operating-system temporary output directories. Follow with `node node_modules/typescript/bin/tsc --noEmit --incremental false` for type checking.
 
-Review the boundary in `src/lib/d1/server-proxy.ts`, the thin Next 15 Promise-params adapter in `src/app/api/d1/[action]/route.ts`, and the observable contract in `tests/d1/proxy.spec.ts`. Existing donation/admin/Stellar helpers are unchanged. Wallet proof, payment intent, receipts, UI, phone coordination and live financial journeys are later tasks.
+Review the boundary in `src/lib/d1/server-proxy.ts`, the thin Next 15 Promise-params adapter in `src/app/api/d1/[action]/route.ts`, and the observable contract in `tests/d1/proxy.spec.ts`. Existing donation/admin/Stellar helpers are unchanged. T2a's command checks are `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/commands.spec.ts --max-failures=0`. Payment intent, receipts, UI, phone coordination and live financial journeys are later tasks.
 
 **Configuration, authenticated reads and passing offline tests are not financial acceptance.** Neither a reachable backend nor a successful reconcile response proves final full-principal settlement. Deployment and live actions require separate coordination and authorization.
