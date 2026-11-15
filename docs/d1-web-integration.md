@@ -238,6 +238,20 @@ The independent, deeply frozen return has exactly `{config, request_id, incident
 
 Focused offline check: `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/donation-evidence.spec.ts --max-failures=0`. Fixtures use synthetic SDK signatures, result XDR and raw ledger/operation records, with no live calls.
 
+## T3 cached evidence: strict normalized-report reload validation
+
+`validateStoredDonationEvidence(snapshot: unknown, evidence: unknown): DonationEvidence` in `src/lib/d1/stored-donation-evidence.ts` validates a decoded original `SignedDonation` and cached normalized `DonationEvidence`. It returns a fresh, canonical-key-order, deeply frozen copy, independent of input order and later mutation. It never mutates or freezes caller data, including on rejection.
+
+This pure reload boundary reuses the existing public transaction and receipt validators:
+
+- Rebuild the full original unsigned snapshot, check its retained XDR/hash and verify the signed transaction's body and donor proof. Unsigned/signed XDR strings are bounded to 1,048,576 characters. Require exact original config, request UUID, full incident, transaction hash, donor, pool, asset and **gross** amount; never substitute allocated amount.
+- Require exactly `{config, request_id, incident_id, payment, ledger}` and the nested shapes documented above. Operation ID is a canonical positive 1–19-digit string, ledger sequence is positive uint32 and ledger hash is lowercase 64-hex. Canonical whole-second UTC `closed_at` must derive exactly the retained nonnegative integer `confirmedAt` in **seconds**, with a representable `originalDeadline(confirmedAt)` (+300 seconds).
+- Read plain records through descriptors and validate typed leaves with fixed-depth schema traversal, not recursive input serialization. Unknown/symbol/hidden/accessor fields, nonplain records, cycles and deep structures reject without invoking getters or coercion hooks. Every rejection is exactly `Error('d1_stored_donation_evidence_invalid')`, without a cause or raw details.
+
+**Consistency only:** a normalized cached report cannot re-prove raw result XDR, envelope/operation reports, authenticated browser storage, ledger inclusion or settlement. UUID/namespace remain external metadata, not signature-authenticated identity; replacing a whole consistent record is not detected. No administrator, beneficiary, allocation or authority/resolution flags are added. This unit performs no IO, clock reads, persistence, release or retry. A later wrapper must invoke the observer itself before durable persistence; S10's occupied pending scope is unchanged. Durable handoff, release and UI remain unfinished.
+
+Focused offline check: `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/stored-donation-evidence.spec.ts --max-failures=0`. The 13 tests include raw-parser-to-JSON round trips for native, short-code credit and long-code credit assets. Compatibility check: `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/donation-evidence.spec.ts --max-failures=0`. Neither check makes live calls or proves financial acceptance.
+
 ## T3 observer: explicit bounded reads of the original payment
 
 `observeDonation(journal, expectedIntent, fetcher = globalThis.fetch)` in `src/lib/d1/donation-observation.ts` reads a matching Horizon report without claiming, acquiring, signing, sending, saving, releasing or resetting anything. It first validates that fetcher is callable, then reuses `readDonation` to validate the full original intent, canonical retained snapshot and actual donor signature. Only `submission_claimed` records can be observed. No UI or import automatically invokes it.
