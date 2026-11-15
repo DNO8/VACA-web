@@ -73,3 +73,27 @@ Run `pnpm test:d1` or `node node_modules/@playwright/test/cli.js test --config p
 Review the boundary in `src/lib/d1/server-proxy.ts`, the thin Next 15 Promise-params adapter in `src/app/api/d1/[action]/route.ts`, and the observable contract in `tests/d1/proxy.spec.ts`. Existing donation/admin/Stellar helpers are unchanged. T2a's focused checks are `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/commands.spec.ts tests/d1/wallet-proof.spec.ts tests/d1/independent-commands.spec.ts --max-failures=0`. The independent probes use Node crypto as a separate Ed25519 signing oracle. Payment intent, receipts, UI, phone coordination and live financial journeys are later tasks.
 
 **Configuration, authenticated reads and passing offline tests are not financial acceptance.** Neither a reachable backend nor a successful reconcile response proves final full-principal settlement. Deployment and live actions require separate coordination and authorization.
+
+## T2b foundation: original-bound preparation receipt
+
+`validateReceiptContext(value)` in `src/lib/d1/receipt-context.ts` returns a deeply frozen, independent `D1ReceiptContext`. Retain exactly `{config, request_id, admin, incident_id, beneficiary, amount, payment}`. `config` is the matching public D1 configuration above; `payment` is exactly `{transaction_hash, operation_id, donor, pool, asset, amount, confirmedAt}`. The context's `amount` is the requested allocation; the payment's `amount` is the original gross payment. `confirmedAt` is original confirmation time in safe-integer epoch **seconds**, not browser/signing time. Both confirmation and its +300-second deadline must have representable four-digit-year UTC dates. Pool must match config. Namespace/network remain retained even though the receipt does not echo them.
+
+Call `parsePreparationReceipt(raw, expectedContext)` from `src/lib/d1/preparation-receipt.ts` with decoded receipt data, not a JSON string. It validates context first and returns an independent, deeply frozen `PreparationReceipt` in the exact backend shape:
+
+- Outer: `{revision: 1, state: 'allocated', request_id, allocation}`.
+- Allocation: `{reservation, payment, allocated_amount, state: 'allocated', allocated_at}`.
+- Reservation: `{request_id, authorized_by, request, state: 'reserved', reserved_at}`.
+- Request: `{version: 1, incident_id, donor, beneficiary, asset, amount, deadline}`.
+- Payment: `{transaction_hash, operation_id, donor, pool, asset, amount}` (no invented confirmation field).
+
+Both request UUIDs and the administrator, incident, beneficiary, original payment identities, asset and amounts must match the retained context. An incident ID or claimable-balance ID never substitutes for the original UUID. Assets are exactly `{type: 'native'}` or `{type: 'issued', code, issuer}`, with 1–12 ASCII alphanumeric code characters and a checksum-valid Ed25519 issuer. All nested objects must be plain data with exact enumerable fields: arrays, coercion, accessors, symbols, hidden and unknown fields are rejected without invoking getters. Caller inputs are never frozen or mutated.
+
+Amounts are positive canonical strings with seven decimal places and at most twelve integer digits, compared as **BigInt stroops**, never floating point. Allocation and request amount must equal the expected requested amount and cannot exceed original gross payment. **A 10.0000000 payment allocated as 1.0000000 is valid**; it proves neither settlement of 10 nor current remaining capacity. Deadline must equal original `confirmedAt + 300`, exactly `YYYY-MM-DDTHH:mm:ssZ`; `reserved_at`/`allocated_at` require `YYYY-MM-DDTHH:mm:ss.sssZ`. Impossible calendar dates, timezone aliases and renewed deadlines are rejected, not normalized.
+
+| Stable `Error.message` | Rejection |
+| --- | --- |
+| `d1_invalid_receipt_context` | Malformed retained context/configuration, unrepresentable time, mismatched pool or requested amount exceeding gross payment |
+| `d1_malformed_preparation_receipt` | Invalid receipt shape, primitive, asset, amount, state/version or canonical calendar date |
+| `d1_receipt_binding_mismatch` | Structurally valid receipt differs from original identity/economics or original deadline |
+
+This is **binding to caller-retained evidence, not independent authentication** of that evidence, administrator authority or blockchain provenance. No IO, retries, settlement, claim/refund status or current availability interpretation is added. Issuance/reconciliation parsers, durable handoff and UI remain later units. Focused offline check: `node node_modules/@playwright/test/cli.js test --config playwright.d1.config.ts tests/d1/preparation-receipt.spec.ts --max-failures=0`.
