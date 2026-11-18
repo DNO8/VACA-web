@@ -1,4 +1,6 @@
 import { StrKey } from '@stellar/stellar-sdk';
+import { receiptAccount, receiptId } from './receipt-context';
+import { parseRefundReceipt, type RefundReceiptContext } from './refund-receipt';
 
 export type ProxyEnvironment = {
   D1_CUSTODY_SUPABASE_URL?: string;
@@ -99,12 +101,31 @@ function validConfig(value: unknown): value is Record<string, unknown> {
     typeof value.pool_public_key === 'string' && StrKey.isValidEd25519PublicKey(value.pool_public_key);
 }
 
+const refundRoutes = [
+  { path: 'refund-status', version: 1, action: 'refund_status' },
+  { path: 'refund', version: 1, action: 'refund' },
+  { path: 'refund-reconcile', version: 1, action: 'refund_reconcile' },
+  { path: 'refund-remainder-status', version: 2, action: 'refund_remainder_status' },
+  { path: 'refund-remainder', version: 2, action: 'refund_remainder' },
+  { path: 'refund-remainder-reconcile', version: 2, action: 'refund_remainder_reconcile' },
+] as const;
+
+function refundContext(value: Record<string, unknown>, route: typeof refundRoutes[number], namespace: string): RefundReceiptContext | null {
+  if (value.version !== route.version || value.action !== route.action || value.network !== 'TESTNET' || value.namespace !== namespace) return null;
+  try {
+    // Correlation only: the backend authenticates the pool, administrator and personal proof.
+    return Object.freeze({ version: route.version, action: route.action, network: 'TESTNET', namespace: receiptId(value.namespace),
+      pool: receiptAccount(value.pool), request_id: receiptId(value.request_id) }) as RefundReceiptContext;
+  } catch { return null; }
+}
+
 export async function proxyD1(
   request: Request,
   action: string,
   dependencies: { env: ProxyEnvironment; fetch: typeof fetch },
 ): Promise<Response> {
-  if (!['config', 'prepare', 'issue', 'reconcile'].includes(action)) return error('unsupported_action', 404);
+  const refundRoute = refundRoutes.find(route => route.path === action);
+  if (!refundRoute && !['config', 'prepare', 'issue', 'reconcile'].includes(action)) return error('unsupported_action', 404);
   const method = action === 'config' ? 'GET' : 'POST';
   if (request.method !== method) return error('method_not_allowed', 405);
   const url = new URL(request.url);
@@ -115,11 +136,17 @@ export async function proxyD1(
   if (!settings) return error('configuration_error', 503);
 
   let body: Uint8Array | undefined;
+  let expectedRefund: RefundReceiptContext | null = null;
   if (method === 'POST') {
     if (!isJson(request.headers)) return error('unsupported_media_type', 415);
     try {
       body = await readBounded(request.body, REQUEST_LIMIT);
-      if (!object(parseJson(body))) return error('invalid_json', 400);
+      const value = parseJson(body);
+      if (!object(value)) return error('invalid_json', 400);
+      if (refundRoute) {
+        expectedRefund = refundContext(value, refundRoute, settings.namespace);
+        if (!expectedRefund) return error('invalid_request', 400);
+      }
     } catch (cause) {
       return cause instanceof BodyLimitError ? error('body_too_large', 413) : error('invalid_json', 400);
     }
@@ -155,6 +182,11 @@ export async function proxyD1(
         return error('invalid_upstream_response', 502);
       }
       const value = parseJson(await readBounded(upstream.body, RESPONSE_LIMIT, controller.signal));
+      const refundConflict = refundRoute && ['refund', 'refund_remainder'].includes(refundRoute.action) && upstream.status === 409 &&
+        !(object(value) && Object.prototype.hasOwnProperty.call(value, 'error'));
+      if (refundRoute && (upstream.ok || refundConflict)) {
+        return json(parseRefundReceipt(upstream.status, value, expectedRefund), upstream.status);
+      }
       if (!upstream.ok) {
         if (!object(value) || Object.keys(value).length !== 1 || typeof value.error !== 'string' ||
             !/^[a-z][a-z0-9_]{0,63}$/.test(value.error)) return error('invalid_upstream_response', 502);

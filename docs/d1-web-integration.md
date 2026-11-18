@@ -22,16 +22,30 @@ There is no service-role or alternate-secret fallback. The local JWT syntax, HS2
 | `/api/d1/prepare` | POST | `/functions/v1/d1-custody/prepare` |
 | `/api/d1/issue` | POST | `/functions/v1/d1-custody/issue` |
 | `/api/d1/reconcile` | POST | `/functions/v1/d1-custody/reconcile` |
+| `/api/d1/refund-status` | POST | `/functions/v1/d1-custody/refund-status` |
+| `/api/d1/refund` | POST | `/functions/v1/d1-custody/refund` |
+| `/api/d1/refund-reconcile` | POST | `/functions/v1/d1-custody/refund-reconcile` |
+| `/api/d1/refund-remainder-status` | POST | `/functions/v1/d1-custody/refund-remainder-status` |
+| `/api/d1/refund-remainder` | POST | `/functions/v1/d1-custody/refund-remainder` |
+| `/api/d1/refund-remainder-reconcile` | POST | `/functions/v1/d1-custody/refund-remainder-reconcile` |
 
 Only the configured Supabase origin is used. Other actions, methods, query strings and noncanonical route paths are rejected before fetch. Request headers and body fields cannot select a destination or gateway credential. Incoming authorization, cookies and API keys are never forwarded. Outgoing headers contain only the configured anon Bearer/API key and JSON content/accept headers; credentials are omitted, redirects are not followed, and every response is `Cache-Control: no-store`.
 
-POST requires `application/json` (parameters such as charset are allowed), a JSON object and at most **8192 streamed bytes**, regardless of Content-Length. Accepted bytes are forwarded unchanged: no reserialization, signature rewrite or extra namespace injection. Command schema and personal authorization remain backend responsibilities.
+POST requires `application/json` (parameters such as charset are allowed), a JSON object and at most **8192 streamed bytes**, regardless of Content-Length. Accepted bytes are forwarded unchanged: no reserialization, signature rewrite or extra namespace injection. Full command schema and personal authorization remain backend responsibilities; the six refund routes additionally validate the correlation fields below.
 
-There is exactly one upstream fetch attempt, with a **10-second abort deadline** covering fetch and response reading. There is no retry, polling, redirect or automatic reconciliation. Upstream JSON is limited to **65536 streamed bytes**. GET config requires exactly `network: TESTNET`, a checksum-valid Stellar `pool_public_key`, and `donation_ttl_seconds: 300`; the response adds the configured public namespace. POST preserves successful JSON and HTTP status, including **202 pending/unverified**, without inferring inclusion or settlement. Non-success backend responses are relayed only as a sole `{error: safe_code}` field (1–64 lowercase alphanumeric/underscore characters, starting with a letter). Upstream headers and malformed/error details are never exposed or logged.
+There is exactly one upstream fetch attempt, with a **10-second abort deadline** covering fetch and response reading. There is no retry, polling, redirect or automatic reconciliation. Upstream JSON is limited to **65536 streamed bytes**. GET config requires exactly `network: TESTNET`, a checksum-valid Stellar `pool_public_key`, and `donation_ttl_seconds: 300`; the response adds the configured public namespace. Legacy prepare/issue/reconcile preserve successful JSON and HTTP status, including **202 pending/unverified**, without inferring inclusion or settlement. Refund success responses must instead pass the bound receipt parser. Non-success backend responses otherwise retain the sole `{error: safe_code}` rule (1–64 lowercase alphanumeric/underscore characters, starting with a letter), with the execution-only refund DTO exception below. Upstream headers and malformed/error details are never exposed or logged.
+
+### Manual refund correlation
+
+The first three refund routes require version1 actions `refund_status`, `refund`, `refund_reconcile`; remainder routes require version2 actions `refund_remainder_status`, `refund_remainder`, `refund_remainder_reconcile`. URL suffixes are hyphenated; signed action names use underscores. The proxy requires the route's version/action, `network: TESTNET`, the configured namespace, a valid Ed25519 public `pool`, and a canonical original `request_id`. Invalid correlation returns `400 invalid_request` without an upstream call. It does not validate freshness, renew a timestamp, re-sign, or select a lane from response actions.
+
+The pool is **request-bound, not independently authenticated by this proxy**: server settings contain no pool, and POST does not fetch config. The backend remains responsible for configured-pool matching, current admin membership and the complete personal proof. Valid correlation alone grants nothing.
+
+Successful refund responses are returned only as the validated shape from [the refund receipt parser](d1-refund-receipts.md). HTTP409 DTOs are admitted only on `/refund` and `/refund-remainder`, with the corresponding `not_due` or `blocked` report. Sole safe error envelopes still use the existing sanitizer, including on execution409; malformed, extra-field or mismatched DTOs become `502 invalid_upstream_response`. Status/reconciliation409 DTOs remain rejected. HTTP200 with `not_started` remains unverified, not execution acceptance; a timeout, error, hash or `safeActions` never grants another send. Transport adds no reservation, selector, automatic executor or admin UI.
 
 | Local status | JSON error code |
 | --- | --- |
-| 400 | `invalid_path`, `invalid_json` |
+| 400 | `invalid_path`, `invalid_json`, `invalid_request` (refund correlation only) |
 | 404 / 405 | `unsupported_action` / `method_not_allowed` |
 | 413 / 415 | `body_too_large` / `unsupported_media_type` |
 | 503 | `configuration_error` |
