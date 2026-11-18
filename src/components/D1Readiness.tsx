@@ -19,7 +19,7 @@ export function D1ReadinessView({ state, t }: Props) {
           <p className="break-all">{t('d1_config_pool')} <code>{state.config.pool_public_key}</code></p>
         </div>
       )}
-      <p className="mt-1.5 text-[11px] leading-snug text-[var(--text-muted)]">{t('d1_legacy_payment_notice')}</p>
+      <p className="mt-1.5 text-[11px] leading-snug text-[var(--text-muted)]">{t('d1_payment_notice')}</p>
     </section>
   );
 }
