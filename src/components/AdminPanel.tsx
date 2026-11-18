@@ -3,8 +3,8 @@
 import { useState } from 'react';
 import { X, ShieldCheck, Loader2, Vote } from 'lucide-react';
 import { VaquitaIncident, CATEGORY_COLOR } from '@/lib/vaquitas';
-import { AdminSession, setDonationStatus, recordClaim } from '@/lib/admin';
-import { createVaquitaClaim } from '@/lib/claim';
+import { AdminSession, setDonationStatus } from '@/lib/admin';
+import D1AdminPanel from './D1AdminPanel';
 import { useLang, type StrKey } from '@/lib/i18n';
 
 interface AdminPanelProps {
@@ -45,70 +45,16 @@ export default function AdminPanel({
   const { t } = useLang();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
 
-  // Tras promover (o al liberar una comunitaria existente): si el
-  // reportante tiene wallet, convierte las donaciones acumuladas del pool
-  // en un claimable balance hacia su pubkey y lo registra.
-  const tryClaim = async (
-    incident: VaquitaIncident,
-    stellarPubkey: string | null,
-    context: 'promoted' | 'release',
-  ) => {
-    if (!stellarPubkey) {
-      setNotice(
-        context === 'release'
-          ? t('release_no_wallet')
-          : t('promoted_no_wallet'),
-      );
-      return;
-    }
-    try {
-      const claim = await createVaquitaClaim(stellarPubkey, incident.id);
-      await recordClaim(supabaseUrl, session, incident.id, claim.txHash);
-      setNotice(t('released_ok', { n: claim.amount }));
-    } catch (e: any) {
-      setNotice(t('claim_failed', { e: e?.message ?? 'error' }));
-    }
-  };
-
+  // Curation only. Promotion never releases legacy pool funds or issues D1 funds.
   const act = async (incident: VaquitaIncident, status: 'signal' | 'community' | 'vaquita') => {
     setBusy(incident.id);
     setError('');
-    setNotice('');
     try {
-      const { stellarPubkey } = await setDonationStatus(
-        supabaseUrl,
-        session,
-        incident.id,
-        status,
-      );
-      if (status !== 'signal') await tryClaim(incident, stellarPubkey, 'promoted');
+      await setDonationStatus(supabaseUrl, session, incident.id, status);
       onChanged();
     } catch (e: any) {
       setError(e?.message ?? t('update_failed'));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  // Libera una Vaquita ya promovida (comunitaria o validada) sin cambiar
-  // su estado: solo crea el claimable balance con lo donado al pool.
-  const release = async (incident: VaquitaIncident) => {
-    setBusy(incident.id);
-    setError('');
-    setNotice('');
-    try {
-      const { stellarPubkey } = await setDonationStatus(
-        supabaseUrl,
-        session,
-        incident.id,
-        incident.donationStatus,
-      );
-      await tryClaim(incident, stellarPubkey, 'release');
-      onChanged();
-    } catch (e: any) {
-      setError(e?.message ?? t('release_failed'));
     } finally {
       setBusy(null);
     }
@@ -128,6 +74,7 @@ export default function AdminPanel({
           </div>
         </div>
         <button
+          type="button"
           onClick={onClose}
           className="text-[var(--text-muted)] hover:text-[var(--text-primary)]"
           aria-label={t('admin_close')}
@@ -137,17 +84,12 @@ export default function AdminPanel({
       </div>
 
       {error && (
-        <p className="border-b border-[var(--border-secondary)] px-3 py-2 text-xs text-red-400">
+        <p role="alert" className="border-b border-[var(--border-secondary)] px-3 py-2 text-xs text-red-400">
           {error}
         </p>
       )}
-      {notice && (
-        <p className="border-b border-[var(--border-secondary)] px-3 py-2 text-xs text-[var(--text-muted)]">
-          {notice}
-        </p>
-      )}
-
       <div className="flex-1 space-y-2 overflow-y-auto p-3">
+        <D1AdminPanel key={session.publicKey} admin={session.publicKey} />
         {incidents.map((incident) => {
           const color = CATEGORY_COLOR[incident.category] ?? '#A6C2D4';
           const next = NEXT_STATUS[incident.donationStatus];
@@ -183,6 +125,7 @@ export default function AdminPanel({
               <div className="mt-2 flex gap-1.5">
                 {next && (
                   <button
+                    type="button"
                     disabled={busy != null}
                     onClick={() => act(incident, next.to)}
                     className="flex-1 rounded border border-[var(--gold-primary)] px-2 py-1.5 text-[11px] font-semibold text-[var(--gold-primary)] transition hover:bg-[var(--gold-primary)]/10 disabled:opacity-40"
@@ -194,21 +137,9 @@ export default function AdminPanel({
                     )}
                   </button>
                 )}
-                {incident.donationStatus !== 'signal' && !incident.claimable && (
-                  <button
-                    disabled={busy != null}
-                    onClick={() => release(incident)}
-                    className="flex-1 rounded border border-[var(--gold-primary)]/60 px-2 py-1.5 text-[11px] font-semibold text-[var(--gold-primary)] transition hover:bg-[var(--gold-primary)]/10 disabled:opacity-40"
-                  >
-                    {busy === incident.id ? (
-                      <Loader2 size={11} className="mx-auto animate-spin" />
-                    ) : (
-                      t('release_aid')
-                    )}
-                  </button>
-                )}
                 {incident.donationStatus !== 'signal' && (
                   <button
+                    type="button"
                     disabled={busy != null}
                     onClick={() => act(incident, 'signal')}
                     className="rounded border border-[var(--border-secondary)] px-2 py-1.5 text-[11px] text-[var(--text-muted)] transition hover:text-[var(--text-primary)] disabled:opacity-40"
