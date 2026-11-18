@@ -255,7 +255,7 @@ test('malformed stored envelopes fail closed without changing actual stored data
 test('version change closes old connections; unsupported upgrades abort without changing records', async ({ pages: [a, b] }) => {
   await call(a, 'acquire', [scope, id, intent]);
   expect(await a.evaluate(async () => {
-    const factory = { open: (name: string) => indexedDB.open(name, 2) } as IDBFactory;
+    const factory = { open: (name: string) => indexedDB.open(name, 3) } as IDBFactory;
     try { await window.journalModule.openDonationJournal(factory, 'journal'); }
     catch (e) { return (e as Error).message; }
   })).toBe('d1_journal_open_failed');
