@@ -20,12 +20,13 @@ new Function('require', 'exports', compiled.outputText)(createRequire(file), pub
 const D1ReadinessView = publicExports.D1ReadinessView!;
 
 const config = { network: 'TESTNET' as const, pool_public_key: StrKey.encodeEd25519PublicKey(Buffer.alloc(32, 2)), namespace: 'abcdef01-2345-6789-abcd-0123456789ab', donation_ttl_seconds: 300 as const };
-test('technical states render explicitly and never imply the existing payment button uses D1', () => {
+test('technical states remain read-only and do not contradict the mounted D1 donation flow', () => {
   for (const state of [{ status: 'loading' as const }, { status: 'unavailable' as const }, { status: 'available' as const, config }]) {
     const html = renderToStaticMarkup(createElement(D1ReadinessView, { state, t: (key: Parameters<ComponentProps<typeof View>['t']>[0]) => key }));
     expect(html).toContain('role="status"');
     expect(html).toContain('d1_config_' + state.status);
-    expect(html).toContain('d1_legacy_payment_notice');
+    expect(html).toContain('d1_payment_notice');
+    expect(html).not.toContain('d1_legacy_payment_notice');
     expect(html.includes(config.pool_public_key)).toBe(state.status === 'available');
     expect(html).not.toContain('<button');
     expect(html).not.toContain('<a ');

@@ -17,10 +17,11 @@ import {
   CATEGORY_COLOR,
   VAQUITA_GOLD,
 } from '@/lib/vaquitas';
-import { donateToPool, getBalance } from '@/lib/donate';
+import { getBalance } from '@/lib/donate';
 import { castVote, getVoteCooldown, VoteError } from '@/lib/vote';
 import { useLang, type StrKey } from '@/lib/i18n';
 import D1Readiness from './D1Readiness';
+import D1DonationPanel from './D1DonationPanel';
 
 interface VaquitaAsideProps {
   incident: VaquitaIncident;
@@ -57,10 +58,9 @@ export default function VaquitaAside({
   const { lang, t } = useLang();
   const [wallet, setWallet] = useState<string | null>(null);
   const [balance, setBalance] = useState<string | null>(null);
-  const [busy, setBusy] = useState<'wallet' | 'vote' | 'donate' | null>(null);
+  const [busy, setBusy] = useState<'wallet' | 'vote' | null>(null);
+  const [donationBusy, setDonationBusy] = useState(false);
   const [error, setError] = useState('');
-  const [amount, setAmount] = useState('5');
-  const [donationTx, setDonationTx] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(0);
   const [voteTx, setVoteTx] = useState<string | null>(null);
 
@@ -127,30 +127,6 @@ export default function VaquitaAside({
     return () => clearInterval(t);
   }, [cooldown > 0]);
 
-  const parsedAmount = Number(amount.replace(',', '.'));
-  const amountValid = Number.isFinite(parsedAmount) && parsedAmount > 0;
-
-  const donate = async () => {
-    if (!amountValid) {
-      setError(t('err_amount'));
-      return;
-    }
-    const addr = wallet ?? (await connect());
-    if (!addr) return;
-    setBusy('donate');
-    setError('');
-    setDonationTx(null);
-    try {
-      const res = await donateToPool(addr, String(parsedAmount), incident.id);
-      setDonationTx(res.explorerUrl);
-      setBalance(await getBalance(addr));
-    } catch (e: any) {
-      setError(e?.message ?? t('err_donate'));
-    } finally {
-      setBusy(null);
-    }
-  };
-
   return (
     <div className="vaca-soft-blur absolute inset-y-0 right-0 z-30 flex w-full flex-col border-l border-[var(--border-secondary)] bg-[var(--bg-panel)] md:w-1/4 md:min-w-[340px] md:max-w-[460px]">
       {/* Header */}
@@ -209,7 +185,7 @@ export default function VaquitaAside({
         {/* Wallet */}
         <button
           onClick={connect}
-          disabled={busy != null}
+          disabled={busy != null || donationBusy}
           className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--border-primary)] px-3 py-2 text-xs font-semibold text-[var(--text-primary)] transition hover:border-[var(--gold-primary)] disabled:opacity-50"
         >
           {busy === 'wallet' ? (
@@ -240,7 +216,7 @@ export default function VaquitaAside({
           </div>
           <button
             onClick={vote}
-            disabled={busy != null || cooldown > 0}
+            disabled={busy != null || donationBusy || cooldown > 0}
             className="mt-2 w-full rounded border border-[var(--cyan-primary)] px-2 py-1.5 text-[11px] font-semibold text-[var(--cyan-primary)] transition hover:bg-[var(--cyan-primary)]/10 disabled:opacity-40"
           >
             {busy === 'vote' ? (
@@ -279,46 +255,7 @@ export default function VaquitaAside({
             {t('donation')}
           </div>
           {promoted ? (
-            <>
-              <div className="mt-2 flex gap-1.5">
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={amount}
-                  onChange={(e) =>
-                    setAmount(e.target.value.replace(/[^0-9.,]/g, ''))
-                  }
-                  className="w-20 rounded border border-[var(--border-secondary)] bg-transparent px-2 py-1.5 text-xs text-[var(--text-primary)]"
-                  aria-label={t('amount_aria')}
-                />
-                <button
-                  onClick={donate}
-                  disabled={busy != null || !amountValid}
-                  className="flex-1 rounded border border-[var(--gold-primary)] px-2 py-1.5 text-[11px] font-semibold text-[var(--gold-primary)] transition hover:bg-[var(--gold-primary)]/10 disabled:opacity-40"
-                >
-                  {busy === 'donate' ? (
-                    <Loader2 size={11} className="mx-auto animate-spin" />
-                  ) : amountValid ? (
-                    t('donate_cta', { n: parsedAmount })
-                  ) : (
-                    t('donate_cta_empty')
-                  )}
-                </button>
-              </div>
-              <p className="mt-1.5 text-[10px] leading-snug text-[var(--text-muted)]">
-                {t('donate_note')}
-              </p>
-              {donationTx && (
-                <a
-                  href={donationTx}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-1.5 flex items-center gap-1 text-[11px] text-[var(--cyan-primary)] hover:underline"
-                >
-                  <ExternalLink size={11} /> {t('donate_view_tx')}
-                </a>
-              )}
-            </>
+            <D1DonationPanel key={`${incident.id}:${wallet ?? ''}`} wallet={wallet} incidentId={incident.id} onBusyChange={setDonationBusy} externalBusy={busy != null} />
           ) : (
             <p className="mt-2 text-[10px] leading-snug text-[var(--text-muted)]">
               {t('donate_disabled')}
