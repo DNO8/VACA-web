@@ -20,6 +20,7 @@ import {
 import { donateToPool, getBalance } from '@/lib/donate';
 import { castVote, getVoteCooldown, VoteError } from '@/lib/vote';
 import { useLang, type StrKey } from '@/lib/i18n';
+import D1Readiness from './D1Readiness';
 
 interface VaquitaAsideProps {
   incident: VaquitaIncident;
@@ -268,6 +269,8 @@ export default function VaquitaAside({
             </a>
           )}
         </div>
+
+        <D1Readiness />
 
         {/* Donación */}
         <div className="rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-3">
