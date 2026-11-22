@@ -8,6 +8,7 @@ import { readD1PublicConfig } from '../lib/d1/public-config';
 import { openDonationJournal, type DonationJournalV2 } from '../lib/d1/donation-journal';
 import { createDonationFlow, type DonationFlow } from '../lib/d1/donation-flow';
 import { donationRecovery, type DonationRecovery } from '../lib/d1/donation-recovery';
+import type { D1Profile } from '../lib/d1/profile';
 
 type Status = 'loading' | 'connect' | 'ready' | 'prepared' | 'signed' | 'submitted_unverified' | 'observed' | 'unresolved' | 'unavailable';
 const statusKeys: Record<Status, StrKey> = {
@@ -76,8 +77,8 @@ function safeError(error: unknown): string {
   return error instanceof Error && /^d1_[a-z_]+$/.test(error.message) ? error.message : 'd1_flow_unavailable';
 }
 
-export default function D1DonationPanel({ wallet, incidentId, onBusyChange, externalBusy = false }: {
-  wallet: string | null; incidentId: string; onBusyChange?: (busy: boolean) => void; externalBusy?: boolean;
+export default function D1DonationPanel({ wallet, incidentId, onBusyChange, onExecutionChange, externalBusy = false, profile = 'A' }: {
+  wallet: string | null; incidentId: string; onBusyChange?: (busy: boolean) => void; onExecutionChange?: (busy: boolean) => void; externalBusy?: boolean; profile?: D1Profile;
 }) {
   const { t } = useLang();
   const [config, setConfig] = useState<D1Config | null>(null);
@@ -93,6 +94,7 @@ export default function D1DonationPanel({ wallet, incidentId, onBusyChange, exte
   useEffect(() => { if (error) regionRef.current?.querySelector<HTMLElement>('[role="alert"]')?.focus(); }, [error]);
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => () => onBusyChange?.(false), [onBusyChange]);
+  useEffect(() => () => onExecutionChange?.(false), [onExecutionChange]);
   useEffect(() => {
     const version = ++generation.current;
     const controller = new AbortController();
@@ -102,12 +104,16 @@ export default function D1DonationPanel({ wallet, incidentId, onBusyChange, exte
     flowRef.current = null; inFlight.current = false;
     if (wallet) void (async () => {
       try {
-        const result = await readD1PublicConfig(controller.signal);
+        const result = await readD1PublicConfig(controller.signal, fetch, 5000, profile);
         if (!current()) return;
         if (result.status !== 'available') throw new Error('d1_config_unavailable');
         journal = await openDonationJournal(globalThis.indexedDB, 'vaca-d1-donations');
         if (!current()) { journal.close(); return; }
-        flow = createDonationFlow({ config: result.config, donor: wallet, incidentId, journal, signTransaction });
+        const fetcher: typeof fetch = (url, init) => {
+          if (!current()) return Promise.reject(new Error('d1_flow_inactive'));
+          return fetch(url, { ...init, signal: init?.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal });
+        };
+        flow = createDonationFlow({ config: result.config, donor: wallet, incidentId, journal, signTransaction, fetcher });
         const retained = await flow.recover();
         if (!current()) return;
         flowRef.current = flow; setConfig(result.config); setRecovery(retained); setStatus(statusFor(retained));
@@ -116,13 +122,13 @@ export default function D1DonationPanel({ wallet, incidentId, onBusyChange, exte
       } finally { if (current()) setBusy(false); }
     })();
     return () => { controller.abort(); flow?.dispose(); journal?.close(); generation.current++; flowRef.current = null; };
-  }, [wallet, incidentId]);
+  }, [wallet, incidentId, profile]);
 
   async function run(action: 'prepare' | 'sign' | 'send' | 'check' | 'recover') {
     const flow = flowRef.current, version = generation.current;
     if (!flow || inFlight.current || externalBusy) return;
     const current = () => generation.current === version && flowRef.current === flow;
-    inFlight.current = true; setBusy(true); setError('');
+    inFlight.current = true; onBusyChange?.(true); onExecutionChange?.(true); setBusy(true); setError('');
     try {
       let retained = recovery;
       let nextStatus: Status | undefined;
@@ -149,7 +155,7 @@ export default function D1DonationPanel({ wallet, incidentId, onBusyChange, exte
       if (current()) {
         setRecovery(retained); setStatus(readable ? statusFor(retained) : 'unavailable'); setError(safeError(failure));
       }
-    } finally { if (current()) { inFlight.current = false; setBusy(false); } }
+    } finally { if (current()) { inFlight.current = false; onBusyChange?.(false); onExecutionChange?.(false); setBusy(false); } }
   }
   return <div ref={regionRef}><D1DonationView config={config} recovery={recovery} amount={amount} busy={busy || externalBusy} status={status} error={error} t={t}
     onAmountChange={value => { setAmount(value); setError(''); }} onPrepare={() => void run('prepare')}

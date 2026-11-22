@@ -9,6 +9,8 @@ import { readD1PublicConfig } from '../lib/d1/public-config';
 import { openRefundJournal, type RefundJournal } from '../lib/d1/refund-journal';
 import type { D1Config, D1Action } from '../lib/d1/commands';
 import { originalDeadline } from '../lib/d1/receipt-context';
+import type { D1Profile } from '../lib/d1/profile';
+import D1ProfileSelector from './D1ProfileSelector';
 
 const control = 'min-h-12 w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-base text-[var(--text-primary)]';
 const button = 'min-h-12 rounded border border-[var(--gold-primary)] px-3 py-2 text-xs text-[var(--gold-primary)] disabled:opacity-40';
@@ -16,6 +18,7 @@ const button = 'min-h-12 rounded border border-[var(--gold-primary)] px-3 py-2 t
 /** Financial scope is supplied independently of VaquitaIncident and never inferred from curation. */
 export default function D1AdminPanel({ admin }: { admin: string }) {
   const { lang } = useLang(), m = adminFlowMessages(lang), id = useId();
+  const [profile, setProfile] = useState<D1Profile>('A');
   const [config, setConfig] = useState<D1Config | null>(null);
   const [flow, setFlow] = useState<AdminFlow | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [result, setResult] = useState('');
@@ -27,8 +30,8 @@ export default function D1AdminPanel({ admin }: { admin: string }) {
   const errorRef = useRef<HTMLParagraphElement>(null);
   useEffect(() => {
     const controller = new AbortController(); lifecycle.current = controller;
-    return () => { generation.current++; controller.abort(); activeFlow.current?.dispose(); journal.current?.close(); };
-  }, [admin]);
+    return () => { generation.current++; controller.abort(); activeFlow.current?.dispose(); journal.current?.close(); journal.current = null; };
+  }, [admin, profile]);
   function invalidate() {
     generation.current++; activeFlow.current?.dispose(); activeFlow.current = null;
     setFlow(null); setError(''); setResult('');
@@ -76,7 +79,7 @@ export default function D1AdminPanel({ admin }: { admin: string }) {
       if (signal.aborted || generation.current !== current) { store.close(); throw new Error('d1_admin_stale'); }
       journal.current = store;
       const context = { config, request_id: String(data.get('request_id')), admin, incident_id: original.evidence.incident_id, beneficiary: String(data.get('beneficiary')), amount: String(data.get('amount')), payment: original.evidence.payment };
-      const next = createAdminFlow(config, original, context, { journal: store, history, signMessage, fetcher, knownIssuanceHash: knownHash || undefined, ...(preparation ? { preparationReceipt: parse(preparation, 65536) } : {}) });
+      const next = createAdminFlow(config, original, context, { journal: store, history, signMessage, fetcher, profile, knownIssuanceHash: knownHash || undefined, ...(preparation ? { preparationReceipt: parse(preparation, 65536) } : {}) });
       activeFlow.current?.dispose(); activeFlow.current = next; setFlow(next);
       return m.reviewReady;
     });
@@ -97,11 +100,15 @@ export default function D1AdminPanel({ admin }: { admin: string }) {
   return <section className="space-y-3 rounded-lg border border-[var(--gold-primary)]/40 p-3 text-xs" aria-labelledby={`${id}-title`}>
     <h2 id={`${id}-title`} className="font-bold text-[var(--text-heading)]">{m.title}</h2>
     <p>{m.authority}</p><p>{m.scope}</p>
+    <D1ProfileSelector profile={profile} disabled={busy} onChange={value => {
+      if (inFlight.current || value === profile) return;
+      lifecycle.current?.abort(); invalidate(); setConfig(null); setLane(''); setInitial('prepare'); setRefundAction('status'); setProfile(value);
+    }} />
     <button type="button" className={button} disabled={busy} onClick={() => {
       invalidate();
       void perform(async signal => {
         setConfig(null);
-        const response = await readD1PublicConfig(signal);
+        const response = await readD1PublicConfig(signal, fetch, 5000, profile);
         if (response.status !== 'available') throw new Error('d1_admin_config_unavailable');
         if (!signal.aborted) setConfig(response.config);
         return m.configReady;

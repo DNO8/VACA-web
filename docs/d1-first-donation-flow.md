@@ -4,7 +4,7 @@
 
 ## Quick path
 
-1. Open a promoted incident and connect the existing Freighter wallet. It must have an existing funded Testnet account; this flow never funds accounts.
+1. Open a promoted incident and choose the explicit [D1 profile](d1-b-client-profile.md): **A · original (default)** or **B · video-auto (separate pool)**. Connect the existing Freighter wallet. It must have an existing funded Testnet account; this flow never funds accounts. Configuration and the donation use the same selected profile.
 2. Enter positive native XLM using a decimal point and at most seven decimal places. Select **Prepare or recover original**. Preparation reads the fixed Testnet account sequence and saves the original before any signature.
 3. Review the retained exact amount, configured pool, full incident, namespace, donor, request UUID and original transaction hash. Select **Sign exactly … XLM**. Signing does not send.
 4. Select **Send signed … XLM once**. A durable claim must succeed before the one POST of the exact retained wallet bytes. An HTTP response is unverified, not payment evidence.
@@ -23,6 +23,8 @@
 | Competing tab/coordinator | Journal scope acquisition and submission claim choose the winner, not a React state flag. |
 | Corrupt or substituted cached evidence | Reject through the existing original-bound validators; never use cached flags as release authority. |
 | Browser storage unavailable | Fail closed; no signing or sending without durable storage. |
+
+Changing profile sends nothing and releases nothing. Selection is locked synchronously during an explicit financial action, including wallet/storage waits. Configuration loading alone does not steal native radio focus or prevent another selection. A changed/unmounted panel rejects late results and cannot start a late network send; return to the original profile to recover its unchanged original. Both profiles keep independent network/pool/namespace scopes in the same existing journal; switching is not permission to resend an A payment as B.
 
 The browser uses the IndexedDB journal `vaca-d1-donations`. Recovery reconstructs unsigned XDR and validates retained signatures through `donation-session`; optional opaque journal resolution evidence passes `validateStoredDonationEvidence`. This is consistency checking, **not authentication of local storage**. There is no new resolution writer, import/export channel, backend donor-status endpoint or active-CB resolver. Fresh observations are held in the current panel only; after reload explicitly check again. No secrets are exported.
 

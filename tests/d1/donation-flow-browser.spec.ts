@@ -15,7 +15,7 @@ import React from 'react';
 export const donor = 'synthetic-donor';
 export const config = { network: 'TESTNET', pool_public_key: 'synthetic-pool', namespace: 'synthetic-namespace', donation_ttl_seconds: 300 };
 export const probe = { calls: { prepare: 0, sign: 0, send: 0, check: 0, wallet: 0, vote: 0 },
-  hold: '', pending: 0, completed: 0, disposed: [], voteResults: [], release() {}, render() {}, unmount() {} };
+  hold: '', pending: 0, completed: 0, disposed: [], voteResults: [], configProfiles: [], release() {}, render() {}, unmount() {} };
 const sessions = new Map();
 async function gate(action) {
   if (probe.hold === action) {
@@ -25,30 +25,34 @@ async function gate(action) {
   }
 }
 export const useLang = () => ({ lang: 'en', t: (key, vars) => key + (vars ? ':' + Object.values(vars).join('|') : '') });
-export const readD1PublicConfig = async () => ({ status: 'available', config });
+export const readD1PublicConfig = async (_signal, _fetcher, _timeout, profile = 'A') => {
+  probe.configProfiles.push(profile); await gate('config');
+  return { status: 'available', config: profile === 'A' ? config : { ...config, namespace: 'synthetic-B', pool_public_key: 'separate-B-pool' } };
+};
 export const openDonationJournal = async () => ({ close() {} });
 export function donationRecovery(session, evidence = null) {
   return { session, evidence, repeatBlocked: true, deadline: evidence ? '2027-01-15T08:05:00Z' : null };
 }
-export function createDonationFlow({ incidentId }) {
+export function createDonationFlow({ incidentId, config }) {
+  const scope = JSON.stringify([config.namespace, incidentId]);
   return {
     dispose() { probe.disposed.push(incidentId); },
-    async recover() { return sessions.has(incidentId) ? donationRecovery(sessions.get(incidentId)) : null; },
+    async recover() { return sessions.has(scope) ? donationRecovery(sessions.get(scope)) : null; },
     async prepare(amount) {
       probe.calls.prepare++; await gate('prepare');
       const session = { state: 'intent', scope: incidentId, requestId: 'render-only-id', snapshot: {
         intent: { config, donor, incident_id: incidentId, request_id: 'render-only-id', asset: { type: 'native' }, amount },
         transactionHash: 'a'.repeat(64), unsignedXdr: 'render-only-unsigned' } };
-      sessions.set(incidentId, session); probe.completed++; return donationRecovery(session);
+      sessions.set(scope, session); probe.completed++; return donationRecovery(session);
     },
     async sign(session) {
       probe.calls.sign++; await gate('sign');
       const signed = { ...session, state: 'signed', snapshot: { ...session.snapshot, signedTxXdr: 'render-only-signed' } };
-      sessions.set(incidentId, signed); return signed;
+      sessions.set(scope, signed); return signed;
     },
     async send(session) {
       probe.calls.send++; await gate('send');
-      sessions.set(incidentId, { ...session, state: 'submission_claimed' });
+      sessions.set(scope, { ...session, state: 'submission_claimed' });
       return { state: 'unknown', transactionHash: session.snapshot.transactionHash };
     },
     async check() {
@@ -121,7 +125,7 @@ base.beforeAll(async () => {
 
 type Probe = {
   calls: Record<'prepare' | 'sign' | 'send' | 'check' | 'wallet' | 'vote', number>;
-  hold: string; pending: number; completed: number; disposed: string[];
+  hold: string; pending: number; completed: number; disposed: string[]; configProfiles: string[];
   voteResults: unknown[]; release(): void; render(incidentId: string): void; unmount(): void;
 };
 type BrowserWindow = typeof window & { donorProbe: Probe; journalModule: typeof import('../../src/lib/d1/donation-journal'); journal: DonationJournalV2 };
@@ -232,6 +236,39 @@ test('pending panel completions cannot repaint a changed incident or an unmounte
   expect(await calls(page)).toEqual({ prepare: 2, sign: 0, send: 0, check: 0, wallet: 1, vote: 0 });
 });
 
+test('native profile selection is keyboard operable, locked during work, and recovers only its retained scope', async ({ pages: [page] }) => {
+  await connect(page);
+  const a = page.getByRole('radio', { name: 'd1_profile_a', exact: true });
+  const b = page.getByRole('radio', { name: 'd1_profile_b', exact: true });
+  await expect(a).toBeChecked(); await expect(a).toBeEnabled();
+  await a.focus(); await expect(a).toBeFocused(); await page.keyboard.press('ArrowRight');
+  await expect(b).toBeChecked(); await expect(b).toBeFocused();
+  await expect(page.getByText('TESTNET · d1_config_pool separate-B-pool')).toBeVisible();
+  await hold(page, 'prepare'); await page.getByRole('button', { name: 'd1_prepare', exact: true }).click();
+  await expect(a).toBeDisabled(); await expect(b).toBeDisabled();
+  await release(page); await expect(a).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'd1_sign:5', exact: true })).toBeVisible();
+  await a.check(); await expect(page.getByLabel('amount_aria', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'd1_prepare', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'd1_sign:5', exact: true })).toBeVisible();
+  await b.check();
+  await expect(page.getByText('d1_namespace: synthetic-B', { exact: true })).toBeVisible();
+  await a.check();
+  await expect(page.getByText('d1_namespace: synthetic-namespace', { exact: true })).toBeVisible();
+  expect(await calls(page)).toEqual({ prepare: 2, sign: 0, send: 0, check: 0, wallet: 1, vote: 0 });
+  expect(await page.evaluate(() => (window as BrowserWindow).donorProbe.configProfiles)).toEqual(['A', 'B', 'A', 'B', 'A']);
+});
+
+test('late B configuration cannot repaint an unmounted donor view', async ({ pages: [page] }) => {
+  await connect(page); await hold(page, 'config');
+  await page.getByRole('radio', { name: 'd1_profile_b', exact: true }).check();
+  await expect.poll(() => page.evaluate(() => (window as BrowserWindow).donorProbe.pending)).toBe(1);
+  await page.evaluate(() => (window as BrowserWindow).donorProbe.unmount()); await release(page);
+  await expect.poll(() => page.evaluate(() => (window as BrowserWindow).donorProbe.pending)).toBe(0);
+  await expect(page.locator('#root')).toBeEmpty();
+  expect(await calls(page)).toEqual({ prepare: 0, sign: 0, send: 0, check: 0, wallet: 1, vote: 0 });
+});
+
 // Opaque journal bytes deliberately do not claim signature validity or coordinator coverage.
 const journalScript = `(() => { const exports = {}; ${ts.transpileModule(readFileSync(resolve(__dirname, '../../src/lib/d1/donation-journal.ts'), 'utf8'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
@@ -263,4 +300,12 @@ test('real IndexedDB permits one cross-instance original claim and retains it af
     expect(await page.evaluate(id => (window as BrowserWindow).journal.read(id), id)).toEqual(original);
     await page.evaluate(() => (window as BrowserWindow).journal.close());
   }
+  await loadJournal(a);
+  const bScope = JSON.stringify(['TESTNET', 'GAYWVFBP2YPYMU245D6AOE7WWTVZOWGPVIFVGOH5EFFSSQ3VZAVR5JCW', '8126a1f4-ed8a-41ec-905b-9ad3442e5e6e', 'same-donor', 'same-incident']);
+  expect(await a.evaluate(({ bScope, rival }) => (window as BrowserWindow).journal.acquire(bScope, rival, 'distinct B original'), { bScope, rival })).toMatchObject({ acquired: true, record: { scope: bScope, requestId: rival, state: 'intent' } });
+  expect(await claim(a)).toEqual({ claimed: false, record: original });
+  await a.reload(); await loadJournal(a);
+  expect(await a.evaluate(scope => (window as BrowserWindow).journal.readScope(scope), scope)).toEqual({ record: original, active: true, resolution: null });
+  expect(await a.evaluate(bScope => (window as BrowserWindow).journal.readScope(bScope), bScope)).toMatchObject({ active: true, resolution: null, record: { scope: bScope, requestId: rival, state: 'intent', intent: 'distinct B original' } });
+  await a.evaluate(() => (window as BrowserWindow).journal.close());
 });

@@ -41,6 +41,7 @@ test('Admin financial forms have named explicit controls, visible labels and bil
     const realReact = createRequire(__filename)('react');
     const exports = load('D1AdminPanel.tsx', {
       '@/lib/i18n': { useLang: () => ({ lang }) },
+      './D1ProfileSelector': load('D1ProfileSelector.tsx', { '../lib/i18n': { useLang: () => ({ t: (key: string) => key }) } }).default,
       '@stellar/freighter-api': { signMessage: async () => { throw new Error('forbidden'); } },
       '../lib/d1/admin-flow': {}, '../lib/d1/public-config': {}, '../lib/d1/refund-journal': {},
     });
@@ -49,6 +50,9 @@ test('Admin financial forms have named explicit controls, visible labels and bil
     expect(html).toContain('name="snapshot"'); expect(html).toContain('name="request_id"'); expect(html).toContain('name="beneficiary"'); expect(html).toContain('name="amount"');
     expect(html).toContain('role="status"'); expect(html).toContain('role="alert"');
     expect(html).toContain('type="button"'); expect(html).not.toContain('donor-payment-status');
+    expect(html).toContain('<fieldset'); expect(html).toContain('<legend');
+    expect(html).toContain('type="radio"'); expect(html).toContain('value="A"'); expect(html).toContain('value="B"');
+    expect(html).toContain('d1_profile_a'); expect(html).toContain('d1_profile_b');
     expect(html).toContain(lang === 'es' ? 'no acredita' : 'does not establish');
     expect(realReact).toBeTruthy();
   }

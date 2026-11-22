@@ -13,6 +13,8 @@ interface BrowserProbe {
   curation: { incident: string; status: string }[];
   changed: number;
   legacy: number;
+  configProfiles: string[]; profiles: string[]; holdConfig: boolean;
+  unmount(): void;
   complete(error?: string): void;
   openRefundJournal: typeof import('../../src/lib/d1/refund-journal').openRefundJournal;
   journal?: RefundJournal;
@@ -32,7 +34,7 @@ base.beforeAll(async () => {
   const root = process.cwd(), require = createRequire(__filename);
   const ports = join(scratch, 'ports.ts'), loader = join(scratch, 'loader.cjs');
   writeFileSync(ports, `
-    export const probe = { calls: [], curation: [], changed: 0, legacy: 0, complete() {} };
+    export const probe = { calls: [], curation: [], changed: 0, legacy: 0, configProfiles: [], profiles: [], holdConfig: false, complete() {}, unmount() {} };
     export const useLang = () => ({ lang: 'en', t: key => key });
     export const CATEGORY_COLOR = { sos: '#fff' };
     export const X = () => null, ShieldCheck = X, Loader2 = X, Vote = X;
@@ -42,10 +44,15 @@ base.beforeAll(async () => {
     export async function setDonationStatus(_url, _session, incident, status) {
       probe.curation.push({ incident, status }); return { stellarPubkey: 'must not release' };
     }
-    export const readD1PublicConfig = async () => ({ status: 'available', config: ${JSON.stringify(config)} });
+    export const readD1PublicConfig = async (_signal, _fetcher, _timeout, profile = 'A') => {
+      probe.configProfiles.push(profile);
+      if (probe.holdConfig) await new Promise(resolve => { probe.complete = resolve; });
+      return { status: 'available', config: profile === 'A' ? ${JSON.stringify(config)} : { ...${JSON.stringify(config)}, namespace: '8126a1f4-ed8a-41ec-905b-9ad3442e5e6e', pool_public_key: 'GAYWVFBP2YPYMU245D6AOE7WWTVZOWGPVIFVGOH5EFFSSQ3VZAVR5JCW' } };
+    };
     export const observeAdminOriginal = async () => ({ evidence: { incident_id: 'original incident', payment: ${JSON.stringify(payment)} } });
     export const browserAdminActionHistory = () => ({});
-    export function createAdminFlow(_config, _original, context) {
+    export function createAdminFlow(_config, _original, context, dependencies) {
+      probe.profiles.push(dependencies.profile);
       const wait = action => {
         probe.calls.push(action);
         return new Promise((resolve, reject) => { probe.complete = error => error ? reject(Error(error)) : resolve({ state: action.startsWith('refund:') ? 'unknown' : 'pending', verification: 'unverified', reason: 'outcome_unresolved' }); });
@@ -69,7 +76,9 @@ base.beforeAll(async () => {
       const [status, setStatus] = useState('community');
       return <AdminPanel session={{ publicKey: 'synthetic-admin', role: 'admin' }} supabaseUrl="https://invalid.example" incidents={[{ id: 'incident-1', category: 'sos', donationStatus: status, votes: 2, claimable: false }]} onChanged={() => { probe.changed++; setStatus(probe.curation.at(-1).status); }} onClose={() => {}} />;
     }
-    createRoot(document.getElementById('root')).render(location.search.includes('curation') ? <Curation /> : <D1AdminPanel admin="synthetic-admin" />);
+    const root = createRoot(document.getElementById('root'));
+    probe.unmount = () => root.unmount();
+    root.render(location.search.includes('curation') ? <Curation /> : <D1AdminPanel admin="synthetic-admin" />);
   `);
   const { webpack } = require('next/dist/compiled/webpack/bundle5')() as {
     webpack(options: unknown, callback: (error: Error | null, stats?: { hasErrors(): boolean; toString(options: unknown): string }) => void): { close(callback: (error?: Error | null) => void): void };
@@ -82,7 +91,7 @@ base.beforeAll(async () => {
         extensions: ['.tsx', '.ts', '.js'],
         // The fallback is essential: react-dom's scheduler lives in its normal pnpm ancestry.
         modules: [resolve(root, 'node_modules'), 'node_modules'],
-        alias: Object.fromEntries(['@/lib/i18n', '@/lib/admin', '@/lib/claim', '@/lib/vaquitas', '@stellar/freighter-api', '@stellar/stellar-sdk', 'lucide-react', '../lib/d1/admin-flow', '../lib/d1/public-config'].map(name => [name + '$', ports])),
+        alias: Object.fromEntries(['@/lib/i18n', '../lib/i18n', '@/lib/admin', '@/lib/claim', '@/lib/vaquitas', '@stellar/freighter-api', '@stellar/stellar-sdk', 'lucide-react', '../lib/d1/admin-flow', '../lib/d1/public-config'].map(name => [name + '$', ports])),
       },
       module: { rules: [{ test: /\.tsx?$/, exclude: /node_modules/, use: loader }] },
       optimization: { minimize: false },
@@ -152,6 +161,36 @@ test('production D1 panel reviews original and amount, then waits for explicit a
   await expect(page.getByRole('button', { name: /reset|resend/i })).toHaveCount(0);
 });
 
+test('Admin profile defaults A, shares B configuration/flow and locks selection during action', async ({ adminPages: { page } }) => {
+  const a = page.getByRole('radio', { name: 'd1_profile_a', exact: true }), b = page.getByRole('radio', { name: 'd1_profile_b', exact: true });
+  await expect(a).toBeChecked(); await b.check();
+  await page.getByRole('button', { name: 'Read public D1 configuration' }).click();
+  await expect(page.locator('pre').first()).toContainText('8126a1f4-ed8a-41ec-905b-9ad3442e5e6e');
+  await page.getByLabel('Original signed payment snapshot (JSON, required)').fill('{}');
+  await page.getByLabel('Retained issuance request UUID', { exact: false }).fill(request_id);
+  await page.getByLabel('Explicit beneficiary public key', { exact: false }).fill(beneficiary);
+  await page.getByLabel('Allocation amount', { exact: false }).fill('1.0000000');
+  await page.getByRole('button', { name: 'Observe original and retain review' }).click();
+  const initial = page.getByRole('form', { name: 'Explicit initial action' });
+  await initial.getByRole('button').click(); await expect(a).toBeDisabled(); await expect(b).toBeDisabled();
+  await page.evaluate(() => window.adminBrowser.complete()); await expect(a).toBeEnabled();
+  await a.check(); await expect(initial).toHaveCount(0); await expect(page.locator('pre').first()).toBeEmpty();
+  expect(await page.evaluate(() => ({ configs: window.adminBrowser.configProfiles, flows: window.adminBrowser.profiles, calls: window.adminBrowser.calls }))).toEqual({ configs: ['B'], flows: ['B'], calls: ['initial:prepare'] });
+  await page.getByRole('button', { name: 'Read public D1 configuration' }).click();
+  await expect(page.locator('pre').first()).toContainText(namespace);
+  expect(await page.evaluate(() => window.adminBrowser.configProfiles)).toEqual(['B', 'A']);
+});
+
+test('unmounted Admin cannot accept a late B configuration', async ({ adminPages: { page } }) => {
+  await page.getByRole('radio', { name: 'd1_profile_b', exact: true }).check();
+  await page.evaluate(() => { window.adminBrowser.holdConfig = true; });
+  await page.getByRole('button', { name: 'Read public D1 configuration' }).click();
+  await expect(page.getByRole('radio', { name: 'd1_profile_a', exact: true })).toBeDisabled();
+  await page.evaluate(() => { window.adminBrowser.unmount(); window.adminBrowser.complete(); });
+  await expect(page.locator('#root')).toBeEmpty();
+  expect(await page.evaluate(() => window.adminBrowser.calls)).toEqual([]);
+});
+
 test('production Admin curation preserves status/change callbacks with zero legacy financial calls', async ({ adminPages: { page } }) => {
   await page.goto(origin + '/?curation');
   await expect(page.getByRole('heading', { name: 'D1 · explicit Testnet administration' })).toBeVisible();
@@ -185,4 +224,13 @@ test('real refund IndexedDB retains one cross-lane winner across independent tab
     expect(await page.evaluate(() => ({ calls: window.adminBrowser.calls, legacy: window.adminBrowser.legacy }))).toEqual({ calls: [], legacy: 0 });
     await page.evaluate(() => window.adminBrowser.journal!.close());
   }
+  const bIdentity = { ...identity, namespace: '8126a1f4-ed8a-41ec-905b-9ad3442e5e6e', pool: 'GAYWVFBP2YPYMU245D6AOE7WWTVZOWGPVIFVGOH5EFFSSQ3VZAVR5JCW' };
+  await a.evaluate(async () => { window.adminBrowser.journal = await window.adminBrowser.openRefundJournal(indexedDB); });
+  expect(await a.evaluate(({ bIdentity, remainder }) => window.adminBrowser.journal!.claimExecution(bIdentity, remainder), { bIdentity, remainder })).toEqual({ claimed: true, hold: { identity: bIdentity, attempt: remainder } });
+  await a.reload(); await a.waitForFunction(() => !!window.adminBrowser);
+  await a.evaluate(async () => { window.adminBrowser.journal = await window.adminBrowser.openRefundJournal(indexedDB); });
+  expect(await a.evaluate(identity => window.adminBrowser.journal!.read(identity), identity)).toEqual(winner);
+  expect(await a.evaluate(bIdentity => window.adminBrowser.journal!.read(bIdentity), bIdentity)).toEqual({ identity: bIdentity, attempt: remainder });
+  expect(await claim(a, full)).toEqual({ claimed: false, hold: winner });
+  await a.evaluate(() => window.adminBrowser.journal!.close());
 });

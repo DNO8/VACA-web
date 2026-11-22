@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { Keypair, Networks, Transaction, hash, xdr } from '@stellar/stellar-sdk';
 import { observeAdminOriginal, createAdminFlow, browserAdminActionHistory, type AdminActionHistory } from '../../src/lib/d1/admin-flow';
 import { postAdminCommand } from '../../src/lib/d1/admin-command-transport';
+import { D1_B } from '../../src/lib/d1/profile';
 import type { RefundJournal, RefundHold } from '../../src/lib/d1/refund-journal';
 
 const id = 'abcdef01-2345-6789-abcd-0123456789ab';
@@ -12,7 +13,8 @@ const pool = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 2)).publicKey();
 const beneficiary = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 3)).publicKey();
 const config = { network: 'TESTNET' as const, pool_public_key: pool, namespace: id, donation_ttl_seconds: 300 as const };
 import { buildDonationTransaction, validateSignedDonation } from '../../src/lib/d1/donation-transaction';
-function fixture() {
+function fixture(settings = config) {
+  const config = settings, pool = config.pool_public_key, id = config.namespace;
   const unsigned = buildDonationTransaction({ config, request_id: id, donor: donor.publicKey(), incident_id: 'original incident', asset: { type: 'native' }, amount: '10.0000000' }, { sequence: '9', fee: '100', timebounds: { minTime: 1700000000, maxTime: 1700000060 } });
   const tx = new Transaction(unsigned.unsignedXdr, Networks.TESTNET); tx.sign(donor);
   const snapshot = validateSignedDonation(unsigned, { signedTxXdr: tx.toXDR(), signerAddress: donor.publicKey() });
@@ -207,6 +209,37 @@ test('proof expiration during initial durable claim retains history and never se
   const before = [...f.records];
   await expect(flow.initial('prepare')).rejects.toThrow(/^d1_admin_action_retained$/);
   expect([...f.records]).toEqual(before); expect(f.calls).toEqual([]);
+});
+
+test('B uses existing proof, receipt and one-use refund helpers without touching A holds', async () => {
+  const bConfig = { ...config, namespace: D1_B.namespace, pool_public_key: D1_B.pool };
+  const a = fixture(), b = fixture(bConfig);
+  const aOriginal = await observeAdminOriginal(config, a.snapshot, a.observer);
+  const bOriginal = await observeAdminOriginal(bConfig, b.snapshot, b.observer);
+  const aFlow = createAdminFlow(config, aOriginal, a.context, a.dependencies);
+  await aFlow.initial('prepare');
+  const retained = [...a.records];
+  expect(() => createAdminFlow(bConfig, bOriginal, b.context, b.dependencies)).toThrow('d1_profile_scope_mismatch');
+  expect(() => createAdminFlow(config, aOriginal, a.context, { ...a.dependencies, profile: null as unknown as 'A' })).toThrow('d1_profile_unavailable');
+  expect(() => createAdminFlow(bConfig, aOriginal, b.context, { ...b.dependencies, profile: 'B' })).toThrow('d1_admin_original_mismatch');
+  expect(b.calls).toEqual([]); expect(b.signatures).toBe(0); expect(b.hold).toBeNull();
+  const flow = createAdminFlow(bConfig, bOriginal, b.context, { ...b.dependencies, profile: 'B' });
+  await flow.initial('prepare');
+  expect(b.calls[0].body).not.toHaveProperty('namespace'); // Original prepare signature schema.
+  b.reply = () => Response.json({ state: 'pending', verification: 'unverified', requestId: issuanceId, transactionHash: 'cd'.repeat(32) }, { status: 202 });
+  await flow.initial('issue');
+  b.reply = () => Response.json({ state: 'reconciliation_progress', requestId: issuanceId, transactionHash: 'cd'.repeat(32), stage: 'discovery' }, { status: 202 });
+  await flow.initial('reconcile');
+  b.reply = () => Response.json({ error: 'outcome_unresolved' }, { status: 503 });
+  await expect(flow.refund('verified_remainder_v2', 'execute')).rejects.toThrow('d1_admin_http_503:outcome_unresolved');
+  const hold = JSON.stringify(b.hold);
+  await expect(flow.refund('full_gross_v1', 'execute')).rejects.toThrow('d1_refund_execution_retained');
+  await expect(createAdminFlow(bConfig, bOriginal, b.context, { ...b.dependencies, profile: 'B' }).refund('verified_remainder_v2', 'execute')).rejects.toThrow('d1_refund_execution_retained');
+  expect(b.calls.map(call => call.url)).toEqual(['prepare', 'issue', 'reconcile', 'refund-remainder'].map(action => '/api/d1/video-auto/' + action));
+  expect(b.calls.every(call => call.body.pool === D1_B.pool && call.body.network === 'TESTNET')).toBe(true);
+  expect(b.calls.slice(1).every(call => call.body.namespace === D1_B.namespace)).toBe(true);
+  expect(b.signatures).toBe(4); expect(JSON.stringify(b.hold)).toBe(hold); expect([...a.records]).toEqual(retained);
+  await expect(aFlow.initial('prepare')).rejects.toThrow('d1_admin_action_retained'); expect(a.calls).toHaveLength(1);
 });
 
 test('bounded admin transport rejects invalid media and oversized responses without retry', async () => {

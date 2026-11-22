@@ -63,17 +63,23 @@ test('claimed and observed states have no resend/prepare and distinguish deliver
 test('real incident aside mounts D1 in the donation seam and preserves vote/cooldown/connection controls', () => {
   const icons = new Proxy({}, { get: () => () => null });
   let legacyCalls = 0;
+  const section = load('../../src/components/D1DonationSection.tsx', {
+    '../lib/i18n': i18n,
+    './D1ProfileSelector': load('../../src/components/D1ProfileSelector.tsx', { '../lib/i18n': i18n }).default,
+    './D1Readiness': { __esModule: true, default: () => null },
+    './D1DonationPanel': { __esModule: true, default: (p: { incidentId: string; profile: string }) => createElement('section', { 'data-d1-incident': p.incidentId, 'data-d1-profile': p.profile }, 'D1 consumer') },
+  }).default;
   const aside = load('../../src/components/VaquitaAside.tsx', {
     'lucide-react': icons, '@stellar/freighter-api': {}, '@/lib/i18n': i18n,
     '@/lib/vaquitas': { CATEGORY_COLOR: { sos: '#fff' }, VAQUITA_GOLD: '#fc0' },
     '@/lib/donate': { getBalance() { legacyCalls++; }, donateToPool() { legacyCalls++; } },
     '@/lib/vote': { castVote() { throw Error('not during render'); } },
-    './D1Readiness': { __esModule: true, default: () => null },
-    './D1DonationPanel': { __esModule: true, default: (p: { incidentId: string }) => createElement('section', { 'data-d1-incident': p.incidentId }, 'D1 consumer') },
+    './D1DonationSection': section,
   }).default;
   const incident = { id: 'incident:full', category: 'sos', donationStatus: 'community', votes: 3, createdAt: null };
   const html = renderToStaticMarkup(createElement(aside, { incident, regionName: 'Region', supabaseUrl: 'https://example.invalid', voteThreshold: 5, onVote() {}, onClose() {} }));
   expect(html).toContain('data-d1-incident="incident:full"'); expect(html).toContain('connect_wallet');
+  expect(html).toContain('data-d1-profile="A"'); expect(html).toContain('d1_profile_a'); expect(html).toContain('d1_profile_b');
   expect(html).toContain('vote_cta'); expect(html).toContain('3/5'); expect(html).toContain('vote_note');
   expect(html).not.toContain('donate_cta'); expect(legacyCalls).toBe(0);
   const signal = renderToStaticMarkup(createElement(aside, { incident: { ...incident, donationStatus: 'signal' }, regionName: null,

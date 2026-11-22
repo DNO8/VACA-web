@@ -66,6 +66,10 @@ const STRINGS = {
     vote_note:
       'El voto es una transacción testnet firmada por tu wallet (1 cada 5 min). En producción se exigirá KYC o antigüedad contra Sybil.',
     vote_view_tx: 'Ver tu voto en la cadena',
+    d1_profile: 'Perfil D1 · Testnet',
+    d1_profile_a: 'A · original (predeterminado)',
+    d1_profile_b: 'B · video-auto (pool separado)',
+    d1_profile_help: 'Cambiar perfil no envía fondos ni libera originales o retenciones. Vuelve al perfil original para recuperarlos. Selección bloqueada durante una acción.',
     d1_config_loading: 'Consultando configuración D1…',
     d1_config_available: 'Configuración D1 disponible',
     d1_config_unavailable: 'Configuración D1 no disponible',
@@ -203,6 +207,10 @@ const STRINGS = {
     vote_note:
       'Your vote is a testnet transaction signed by your wallet (1 every 5 min). Production will require KYC or wallet age against Sybil attacks.',
     vote_view_tx: 'View your vote on-chain',
+    d1_profile: 'D1 profile · Testnet',
+    d1_profile_a: 'A · original (default)',
+    d1_profile_b: 'B · video-auto (separate pool)',
+    d1_profile_help: 'Changing profile sends no funds and releases no originals or holds. Return to the original profile to recover them. Selection is locked during an action.',
     d1_config_loading: 'Reading D1 configuration…',
     d1_config_available: 'D1 configuration available',
     d1_config_unavailable: 'D1 configuration unavailable',

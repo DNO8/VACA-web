@@ -4,7 +4,7 @@ The existing Admin panel now keeps incident curation separate from financial exe
 
 ## Quick path
 
-1. Open Admin and explicitly **read public D1 configuration**. This is Testnet technical configuration, not authority to spend.
+1. Open Admin, select the explicit [A/B profile](d1-b-client-profile.md) (A is default), then explicitly **read public D1 configuration**. This is Testnet technical configuration, not authority to spend. The same profile supplies the command transport, including both refund lanes; B uses `/api/d1/video-auto/` instead of the A prefix in the tables below.
 2. Supply the **original signed payment snapshot**, the **retained issuance UUID**, an explicit beneficiary and a canonical allocation amount such as `1.0000000`. Do not substitute a payment UUID, incident ID, claim ID or feed total for an issuance reference.
 3. Select **Observe original and retain review**. The existing original-hash observer reads only fixed-origin Testnet Horizon transaction/operations/ledger reports. It validates the donor's signed payment and original facts before a live opaque original handle exists. Imported JSON and cached reports alone cannot produce this handle.
 4. Review the immutable donor, pool, asset, gross, payment hash/operation, beneficiary, allocation and original confirmation plus **300 seconds**. A `1.0000000` allocation from `10.0000000` gross does not mean `10.0000000` was settled.
@@ -23,6 +23,8 @@ No actor membership, payment-to-incident mapping, beneficiary discovery or lane 
 `commands`, `wallet-proof`, `receipt-context`, `preparation-receipt` and `issuance-receipt` remain unchanged. Preparation accepts an allocated receipt with HTTP 200/201; issuance/reconciliation use their existing status-aware parsers. A pending/unverified report is never displayed as financial success. A known issuance hash remains bound on subsequent responses.
 
 Prepare and issue each acquire an original-network/namespace/pool/issuance-UUID/action hold before sending. The browser adapter uses Web Locks plus localStorage and fails closed when these are unavailable. Records are never replaced or cleared. Reopening the panel, changing an allocation, or receiving 404/503/unknown cannot authorize a second send. A repeated retained action may request a new personal proof before discovering the durable hold, but never sends again. Reconciliation is a distinct explicit action and does not clear either hold.
+
+Changing profile disposes the live review, clears visible configuration/results and requires a fresh original-bound review, but never edits an original, renews a deadline or clears a durable hold. Selection is disabled during every active action; lifecycle guards reject late wallet/storage/network work. Returning to A recovers only A references and retained history, never a B reinterpretation.
 
 On reload, supply the same original signed snapshot and explicit issuance references. An optional retained preparation receipt is structurally and economically bound again; importing it is not backend authorization. Initial reconciliation additionally requires the known issuance transaction hash. There is intentionally no reset control.
 
