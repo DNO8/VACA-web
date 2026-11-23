@@ -2,6 +2,8 @@ import { test, expect } from '@playwright/test';
 import { StrKey } from '@stellar/stellar-sdk';
 import { proxyD1, type ProxyEnvironment } from '../../src/lib/d1/server-proxy';
 import * as adapter from '../../src/app/api/d1/[action]/route';
+import * as bAdapter from '../../src/app/api/d1/video-auto/[action]/route';
+import { D1_B } from '../../src/lib/d1/profile';
 
 const project = 'abcdefghijklmnopqrst';
 const namespace = '11111111-1111-1111-1111-111111111111';
@@ -117,6 +119,36 @@ for (const route of routes) {
     }
   });
 }
+
+test('B adapter preserves all six refund receipt/status boundaries and rejects foreign scope', async () => {
+  const bKey = [part({ alg: 'HS256', typ: 'JWT' }), part({ role: 'anon', ref: 'tgqxxnldwiqisopiclmk' }), Buffer.alloc(32).toString('base64url')].join('.');
+  const bEnv = { ...env, D1_CUSTODY_SUPABASE_URL: D1_B.origin, D1_CUSTODY_ANON_KEY: bKey };
+  const previous = Object.fromEntries(Object.keys(bEnv).map(name => [name, process.env[name]])), oldFetch = globalThis.fetch;
+  Object.assign(process.env, bEnv);
+  try {
+    for (const route of routes) {
+      const bytes = ' ' + JSON.stringify({ ...command(route), namespace: D1_B.namespace, pool: D1_B.pool }) + '\n';
+      const req = () => request('video-auto/' + route.path, bytes);
+      for (const state of states) {
+        const report = { ...dto(route, state), namespace: D1_B.namespace, pool: D1_B.pool }, code = status(route, state);
+        const p = probe(Response.json(report, { status: code })); globalThis.fetch = p.fetcher;
+        await result(await bAdapter.POST(req(), { params: Promise.resolve({ action: route.path }) }), code, report);
+        expect(p.calls).toHaveLength(1);
+        expect(p.calls[0].url).toBe(`${D1_B.origin}/functions/v1/d1-custody/video-auto/${route.path}`);
+        expect(Buffer.from(p.calls[0].init!.body as Uint8Array).toString()).toBe(bytes);
+      }
+      const p = probe(Response.json(dto(route))); globalThis.fetch = p.fetcher;
+      await result(await bAdapter.POST(req(), { params: Promise.resolve({ action: route.path }) }), 502, { error: 'invalid_upstream_response' });
+      expect(p.calls).toHaveLength(1);
+      const rejected = probe(Response.json({})); globalThis.fetch = rejected.fetcher;
+      await result(await bAdapter.POST(request('video-auto/' + route.path, JSON.stringify(command(route))), { params: Promise.resolve({ action: route.path }) }), 400, { error: 'invalid_request' });
+      expect(rejected.calls).toEqual([]);
+    }
+  } finally {
+    globalThis.fetch = oldFetch;
+    for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+  }
+});
 
 test('refund routes preserve sole safe errors, sanitize malformed errors and never retry failures', async () => {
   for (const route of routes) {

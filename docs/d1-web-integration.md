@@ -14,6 +14,12 @@ Set these server environment variables through your deployment's configuration m
 
 There is no service-role or alternate-secret fallback. The local JWT syntax, HS256 header, `role=anon`, and project `ref` checks guard against accidental misconfiguration; they are **not cryptographic JWT authentication**. The gateway verifies the JWT, and the backend verifies each administrator's personal wallet proof. An anon gateway credential never substitutes for that proof or grants administrator authority. Namespace correctness across deployments remains the operator's responsibility: the backend config does not expose a namespace to compare.
 
+## Explicit A/B selection
+
+A remains the default, with the original environment meaning and routes below. [B client profile](d1-b-client-profile.md) adds only `/api/d1/video-auto/<action>`, mapped to `/functions/v1/d1-custody/video-auto/<action>`, for the same allowlisted actions/methods. B pins the public project, pool, namespace, TESTNET and TTL300; it never changes global A settings or accepts a caller-supplied URL. B is unavailable if the configured gateway project's origin/JWT ref does not match its pin. Its namespace is profile-owned, never copied from `D1_CUSTODY_NAMESPACE`.
+
+B POSTs additionally require its pinned network/pool and namespace (except the unchanged namespace-free v1 prepare schema). Existing body limits, deadline, server-owned gateway headers, unchanged signed bytes and receipt parsers are shared. A keeps its opaque initial-command behavior and request-bound refund correlation; only advertising the B pool as A configuration is explicitly rejected.
+
 ## HTTP contract
 
 | Same-origin route | Method | Fixed upstream action |

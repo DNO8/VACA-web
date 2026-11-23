@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { readD1PublicConfig, type PublicConfigResult } from '../lib/d1/public-config';
 import { useLang, type StrKey } from '../lib/i18n';
+import type { D1Profile } from '../lib/d1/profile';
 
 type State = PublicConfigResult | { status: 'loading' };
 type Props = { state: State; t: (key: StrKey, vars?: Record<string, string | number>) => string };
@@ -24,15 +25,16 @@ export function D1ReadinessView({ state, t }: Props) {
   );
 }
 
-export default function D1Readiness() {
+export default function D1Readiness({ profile = 'A' }: { profile?: D1Profile }) {
   const { t } = useLang();
   const [state, setState] = useState<State>({ status: 'loading' });
   useEffect(() => {
     const controller = new AbortController();
-    void readD1PublicConfig(controller.signal).then(result => {
+    setState({ status: 'loading' });
+    void readD1PublicConfig(controller.signal, fetch, 5000, profile).then(result => {
       if (!controller.signal.aborted && result.status !== 'cancelled') setState(result);
     });
     return () => controller.abort();
-  }, []);
+  }, [profile]);
   return <D1ReadinessView state={state} t={t} />;
 }

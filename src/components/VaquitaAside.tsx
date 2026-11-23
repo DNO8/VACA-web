@@ -20,8 +20,7 @@ import {
 import { getBalance } from '@/lib/donate';
 import { castVote, getVoteCooldown, VoteError } from '@/lib/vote';
 import { useLang, type StrKey } from '@/lib/i18n';
-import D1Readiness from './D1Readiness';
-import D1DonationPanel from './D1DonationPanel';
+import D1DonationSection from './D1DonationSection';
 
 interface VaquitaAsideProps {
   incident: VaquitaIncident;
@@ -246,21 +245,13 @@ export default function VaquitaAside({
           )}
         </div>
 
-        <D1Readiness />
-
         {/* Donación */}
         <div className="rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-3">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-heading)]">
             <HeartHandshake size={13} className="text-[var(--gold-primary)]" />
             {t('donation')}
           </div>
-          {promoted ? (
-            <D1DonationPanel key={`${incident.id}:${wallet ?? ''}`} wallet={wallet} incidentId={incident.id} onBusyChange={setDonationBusy} externalBusy={busy != null} />
-          ) : (
-            <p className="mt-2 text-[10px] leading-snug text-[var(--text-muted)]">
-              {t('donate_disabled')}
-            </p>
-          )}
+          <D1DonationSection wallet={wallet} incidentId={incident.id} enabled={promoted} onBusyChange={setDonationBusy} externalBusy={busy != null} />
         </div>
 
         {error && <p className="text-xs text-red-400">{error}</p>}

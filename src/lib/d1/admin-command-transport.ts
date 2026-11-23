@@ -1,10 +1,19 @@
+import { matchesBCommand, profileCommandFetcher, type D1Profile } from './profile';
+
 export type AdminRoute = 'prepare' | 'issue' | 'reconcile' | 'refund-status' | 'refund' | 'refund-reconcile' | 'refund-remainder-status' | 'refund-remainder' | 'refund-remainder-reconcile';
 export type AdminResponse = Readonly<{ status: number; body: unknown }>;
 const routes: readonly string[] = ['prepare', 'issue', 'reconcile', 'refund-status', 'refund', 'refund-reconcile', 'refund-remainder-status', 'refund-remainder', 'refund-remainder-reconcile'];
 
 /** One bounded, credential-free POST. An acknowledgement is never a financial result. */
-export async function postAdminCommand(route: AdminRoute, body: string, fetcher: typeof fetch): Promise<AdminResponse> {
+export async function postAdminCommand(route: AdminRoute, body: string, fetcher: typeof fetch, profile: D1Profile = 'A'): Promise<AdminResponse> {
   if (!routes.includes(route) || typeof body !== 'string' || new TextEncoder().encode(body).byteLength > 8192) throw new Error('d1_admin_invalid_transport');
+  const selectedFetch = profileCommandFetcher(profile, fetcher);
+  // Resolve profile/scope rejection before the transport's unknown-outcome boundary.
+  if (profile === 'B') {
+    let valid = false;
+    try { valid = matchesBCommand(JSON.parse(body), route); } catch { /* Invalid JSON is not a B command. */ }
+    if (!valid) throw new Error('d1_profile_scope_mismatch');
+  }
   const controller = new AbortController();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let response: Response | undefined;
@@ -14,7 +23,7 @@ export async function postAdminCommand(route: AdminRoute, body: string, fetcher:
   };
   const work = async (): Promise<AdminResponse> => {
     try {
-      response = await fetcher(`/api/d1/${route}`, { method: 'POST', body, headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, credentials: 'omit', redirect: 'error', cache: 'no-store', referrerPolicy: 'no-referrer', signal: controller.signal });
+      response = await selectedFetch(`/api/d1/${route}`, { method: 'POST', body, headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, credentials: 'omit', redirect: 'error', cache: 'no-store', referrerPolicy: 'no-referrer', signal: controller.signal });
       if (controller.signal.aborted || response.redirected || !response.body || response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json') throw new Error('invalid response');
       reader = response.body.getReader();
       let text = '', size = 0;

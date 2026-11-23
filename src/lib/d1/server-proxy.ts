@@ -1,4 +1,5 @@
 import { StrKey } from '@stellar/stellar-sdk';
+import { D1_B, matchesBCommand, profileBase, type D1Profile } from './profile';
 import { receiptAccount, receiptId } from './receipt-context';
 import { parseRefundReceipt, type RefundReceiptContext } from './refund-receipt';
 
@@ -122,18 +123,21 @@ function refundContext(value: Record<string, unknown>, route: typeof refundRoute
 export async function proxyD1(
   request: Request,
   action: string,
-  dependencies: { env: ProxyEnvironment; fetch: typeof fetch },
+  dependencies: { env: ProxyEnvironment; fetch: typeof fetch; profile?: D1Profile },
 ): Promise<Response> {
+  const profile = dependencies.profile === undefined ? 'A' : dependencies.profile;
+  let base: string;
+  try { base = profileBase(profile); } catch { return error('configuration_error', 503); }
   const refundRoute = refundRoutes.find(route => route.path === action);
   if (!refundRoute && !['config', 'prepare', 'issue', 'reconcile'].includes(action)) return error('unsupported_action', 404);
   const method = action === 'config' ? 'GET' : 'POST';
   if (request.method !== method) return error('method_not_allowed', 405);
   const url = new URL(request.url);
-  if (url.pathname !== `/api/d1/${action}` || url.search || url.hash || request.url.includes('?') || request.url.includes('#')) {
+  if (url.pathname !== `${base}/${action}` || url.search || url.hash || request.url.includes('?') || request.url.includes('#')) {
     return error('invalid_path', 400);
   }
-  const settings = configuration(dependencies.env);
-  if (!settings) return error('configuration_error', 503);
+  const settings = configuration(profile === 'B' ? { ...dependencies.env, D1_CUSTODY_NAMESPACE: D1_B.namespace } : dependencies.env);
+  if (!settings || (profile === 'B' && settings.origin !== D1_B.origin)) return error('configuration_error', 503);
 
   let body: Uint8Array | undefined;
   let expectedRefund: RefundReceiptContext | null = null;
@@ -143,6 +147,7 @@ export async function proxyD1(
       body = await readBounded(request.body, REQUEST_LIMIT);
       const value = parseJson(body);
       if (!object(value)) return error('invalid_json', 400);
+      if (profile === 'B' && !matchesBCommand(value, action)) return error('invalid_request', 400);
       if (refundRoute) {
         expectedRefund = refundContext(value, refundRoute, settings.namespace);
         if (!expectedRefund) return error('invalid_request', 400);
@@ -163,7 +168,7 @@ export async function proxyD1(
   const forward = async (): Promise<Response> => {
     let upstream: Response;
     try {
-      upstream = await dependencies.fetch(`${settings.origin}/functions/v1/d1-custody/${action}`, {
+      upstream = await dependencies.fetch(`${settings.origin}/functions/v1/d1-custody/${profile === 'B' ? 'video-auto/' : ''}${action}`, {
         method,
         headers: {
           authorization: `Bearer ${settings.key}`, apikey: settings.key,
@@ -193,7 +198,8 @@ export async function proxyD1(
         return json(value, upstream.status);
       }
       if (action === 'config') {
-        if (upstream.status !== 200 || !validConfig(value)) return error('invalid_upstream_response', 502);
+        if (upstream.status !== 200 || !validConfig(value) ||
+            (profile === 'B' ? value.pool_public_key !== D1_B.pool : value.pool_public_key === D1_B.pool)) return error('invalid_upstream_response', 502);
         return json({ ...value, namespace: settings.namespace }, 200);
       }
       return json(value, upstream.status);

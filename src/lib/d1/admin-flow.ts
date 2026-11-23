@@ -12,6 +12,7 @@ import { validateSignedDonation } from './donation-transaction';
 import type { DonationJournal } from './donation-journal';
 import { observeDonation } from './donation-observation';
 import type { DonationEvidence } from './donation-evidence';
+import { assertProfileConfig, profileCommandFetcher, type D1Profile } from './profile';
 
 /** Opaque live provenance, not an importable authorization credential. */
 export type AdminOriginal = Readonly<{ evidence: DonationEvidence }>;
@@ -61,7 +62,7 @@ export function browserAdminActionHistory(storage: Storage, locks: LockManager):
 export type RefundLane = 'full_gross_v1' | 'verified_remainder_v2';
 export type AdminDependencies = {
   journal: RefundJournal; history: AdminActionHistory; signMessage: SignMessage; fetcher: typeof fetch;
-  clock?: D1Clock; knownIssuanceHash?: string; preparationReceipt?: unknown;
+  clock?: D1Clock; knownIssuanceHash?: string; preparationReceipt?: unknown; profile?: D1Profile;
 };
 const refundActions = {
   full_gross_v1: { version: 1, status: 'refund_status', reconcile: 'refund_reconcile', execute: 'refund' },
@@ -72,6 +73,8 @@ const refundActions = {
 export function createAdminFlow(config: unknown, original: object, expectedContext: unknown, dependencies: AdminDependencies) {
   if (!originals.has(original)) throw new Error('d1_admin_original_unverified');
   const settings = validateD1Config(config), context = validateReceiptContext(expectedContext);
+  const profile = dependencies.profile === undefined ? 'A' : dependencies.profile;
+  assertProfileConfig(profile, settings);
   const evidence = (original as AdminOriginal).evidence;
   if (!sameConfig(settings, evidence.config) || !sameConfig(settings, context.config) || evidence.incident_id !== context.incident_id || JSON.stringify(evidence.payment) !== JSON.stringify(context.payment)) throw new Error('d1_admin_original_mismatch');
   const clock = dependencies.clock ?? (() => Math.floor(Date.now() / 1000));
@@ -81,8 +84,13 @@ export function createAdminFlow(config: unknown, original: object, expectedConte
   const lifecycle = new AbortController();
   const attempted = new Set<D1Action>();
   const identity: RefundOriginalIdentity = Object.freeze({ network: settings.network, namespace: settings.namespace, pool: settings.pool_public_key, request_id: context.request_id });
-  const sender = createRefundSender(settings, dependencies.journal, identity, dependencies.fetcher, clock);
   const active = () => { if (disposed) throw new Error('d1_admin_stale'); };
+  const selectedFetch = profileCommandFetcher(profile, dependencies.fetcher);
+  const fetcher: typeof fetch = (url, init) => {
+    active();
+    return selectedFetch(url, { ...init, signal: init?.signal ? AbortSignal.any([lifecycle.signal, init.signal]) : lifecycle.signal });
+  };
+  const sender = createRefundSender(settings, dependencies.journal, identity, fetcher, clock);
   async function run<T>(operation: () => Promise<T>): Promise<T> {
     active(); if (busy) throw new Error('d1_admin_busy');
     busy = true;
@@ -109,7 +117,7 @@ export function createAdminFlow(config: unknown, original: object, expectedConte
           active();
         }
         validateD1Command(settings, command, clock); // A durable lock wait cannot renew an expired proof.
-        const response = await postAdminCommand(action, bytes, dependencies.fetcher);
+        const response = await postAdminCommand(action, bytes, fetcher);
         active(); assertAdminResponse(response, action === 'prepare' ? [200, 201] : [200, 202]);
         if (action === 'prepare') { preparation = parsePreparationReceipt(response.body, context); return preparation; }
         const parsed = action === 'issue' ? parseIssuanceReceipt(response.status, response.body, context, knownHash) : parseReconciliationReceipt(response.status, response.body, context, knownHash);
@@ -131,7 +139,7 @@ export function createAdminFlow(config: unknown, original: object, expectedConte
         let response;
         if (operation === 'execute') {
           const capability = await sender.claim(bytes); active(); response = await capability.send(lifecycle.signal);
-        } else response = await postAdminCommand(action.replaceAll('_', '-') as AdminRoute, bytes, dependencies.fetcher);
+        } else response = await postAdminCommand(action.replaceAll('_', '-') as AdminRoute, bytes, fetcher);
         active(); assertAdminResponse(response, [200, 202, 409]);
         const correlation = { version: command.version, action: command.action, network: command.network, namespace: command.namespace, pool: command.pool, request_id: command.request_id } as RefundReceiptContext;
         const receipt = parseRefundReceipt(response.status, response.body, correlation);

@@ -1,12 +1,15 @@
 import { validateD1Config, type D1Config } from './commands';
+import { assertProfileConfig, profileBase, type D1Profile } from './profile';
 
 export type PublicConfigResult = { status: 'available'; config: D1Config } | { status: 'unavailable' | 'cancelled' };
 
 /** Read public technical configuration only; never a payment or custody assertion. */
-export async function readD1PublicConfig(signal: AbortSignal, fetcher: typeof fetch = fetch, timeoutMs = 5000): Promise<PublicConfigResult> {
+export async function readD1PublicConfig(signal: AbortSignal, fetcher: typeof fetch = fetch, timeoutMs = 5000, profile: D1Profile = 'A'): Promise<PublicConfigResult> {
   if (signal.aborted) return { status: 'cancelled' };
   let bounded: AbortSignal;
+  let base: string;
   try {
+    base = profileBase(profile);
     // Unsupported browsers fail closed rather than issue an unbounded request.
     bounded = AbortSignal.any([signal, AbortSignal.timeout(Math.min(5000, timeoutMs))]);
   } catch { return { status: 'unavailable' }; }
@@ -28,7 +31,7 @@ export async function readD1PublicConfig(signal: AbortSignal, fetcher: typeof fe
     if (bounded.aborted) { abort(); return; }
     void (async () => {
       try {
-        const response = await fetcher('/api/d1/config', {
+        const response = await fetcher(`${base}/config`, {
           method: 'GET', credentials: 'omit', redirect: 'error', cache: 'no-store', signal: bounded,
         });
         if (finished || response.status !== 200 || response.redirected || !response.body) {
@@ -49,7 +52,9 @@ export async function readD1PublicConfig(signal: AbortSignal, fetcher: typeof fe
           text += decoder.decode(chunk.value, { stream: true });
         }
         text += decoder.decode();
-        finish({ status: 'available', config: validateD1Config(JSON.parse(text)) });
+        const config = validateD1Config(JSON.parse(text));
+        assertProfileConfig(profile, config);
+        finish({ status: 'available', config });
       } catch {
         cancelBody();
         finish({ status: signal.aborted ? 'cancelled' : 'unavailable' });
