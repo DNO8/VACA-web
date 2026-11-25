@@ -24,6 +24,7 @@ function load(relative: string, stubs: Record<string, unknown> = {}, fetcher: ty
 function client(status: number, body: unknown, networkFailure = false,
   preflight: Response | Error = Response.json({ wallet_age_eligible: true })) {
   const calls: string[] = [];
+  const requests: { method: string; headers: RequestInit['headers'] }[] = [];
   class Builder {
     addOperation() { return this; }
     setTimeout() { return this; }
@@ -36,13 +37,18 @@ function client(status: number, body: unknown, networkFailure = false,
     './stellar': { NETWORK: 'Testnet fixture', getServer: () => { calls.push('server'); return { loadAccount: async () => { calls.push('load'); return {}; }, submitTransaction: async () => { calls.push('submit'); return { hash }; } }; } },
     './donate': { fundIfMissing: async () => { calls.push('fund'); } },
   }, (async (url: string, init?: RequestInit) => {
+    requests.push({ method: init?.method ?? 'GET', headers: init?.headers });
+    if (!init?.method && new URL(url).searchParams.has('voter')) {
+      calls.push('cooldown');
+      return Response.json({ retry_after: 17, cooldown_s: 300 });
+    }
     if (init?.method === 'GET') {
       calls.push('preflight');
       expect(new URL(url).searchParams.get('voter')).toBe('public-wallet');
       expect(new URL(url).searchParams.get('check')).toBe('wallet_age');
       expect(init.cache).toBe('no-store');
       expect(init.signal).toBeInstanceOf(AbortSignal);
-      expect(init.headers).toEqual({ apikey: 'test-public-key' });
+      expect(init.headers).toEqual({ apikey: 'test-public-key', Authorization: 'Bearer test-public-key' });
       if (preflight instanceof Error) throw preflight;
       return preflight;
     }
@@ -51,10 +57,23 @@ function client(status: number, body: unknown, networkFailure = false,
     if (networkFailure) throw new TypeError('Network unavailable');
     return Response.json(body, { status });
   }) as typeof fetch);
-  return Object.assign(api, { calls });
+  return Object.assign(api, { calls, requests });
 }
 
 const submittedCalls = ['preflight', 'server', 'fund', 'load', 'sign', 'submit', 'register'];
+
+test('public anon bearer reaches preflight, registration and cooldown consistently', async () => {
+  const api = client(200, { ok: true, votes: 20 });
+  await api.castVote('https://example.invalid', 'public-wallet', 'incident:full');
+  await expect(api.getVoteCooldown('https://example.invalid', 'public-wallet')).resolves.toBe(17);
+  const headers = { apikey: 'test-public-key', Authorization: 'Bearer test-public-key' };
+  expect(api.requests).toEqual([
+    { method: 'GET', headers },
+    { method: 'POST', headers: { 'content-type': 'application/json', ...headers } },
+    { method: 'GET', headers },
+  ]);
+  expect(api.calls).toEqual([...submittedCalls, 'cooldown']);
+});
 
 test('preflight stops a young wallet before every transaction side effect', async () => {
   const api = client(200, { ok: true, votes: 20 }, false,

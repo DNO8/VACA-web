@@ -15,6 +15,9 @@ import { fundIfMissing } from './donate';
 const VOTE_ENDPOINT = '/functions/v1/vaquita-vote';
 const VOTE_DATA_NAME = 'vq-vote';
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
+// The JWT-protected gateway needs the public anon JWT, never a service-role key.
+const VOTE_HEADERS: Record<string, string> = SUPABASE_ANON_KEY
+  ? { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` } : {};
 
 export interface VoteResult {
   votes: number;
@@ -70,7 +73,7 @@ async function requireWalletAge(supabaseUrl: string, voterPublicKey: string): Pr
     const response = await fetch(
       `${supabaseUrl}${VOTE_ENDPOINT}?voter=${encodeURIComponent(voterPublicKey)}&check=wallet_age`,
       { method: 'GET', cache: 'no-store', signal: controller.signal,
-        headers: SUPABASE_ANON_KEY ? { apikey: SUPABASE_ANON_KEY } : {} },
+        headers: VOTE_HEADERS },
     );
     const body = await response.json();
     if (response.status === 200 && body?.wallet_age_eligible === true) return;
@@ -136,7 +139,7 @@ export async function castVote(
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        ...(SUPABASE_ANON_KEY ? { apikey: SUPABASE_ANON_KEY } : {}),
+        ...VOTE_HEADERS,
       },
       body: JSON.stringify({
         incident_id: incidentId,
@@ -199,7 +202,7 @@ export async function getVoteCooldown(
   try {
     const resp = await fetch(
       `${supabaseUrl}${VOTE_ENDPOINT}?voter=${voterPublicKey}`,
-      { headers: SUPABASE_ANON_KEY ? { apikey: SUPABASE_ANON_KEY } : {} },
+      { headers: VOTE_HEADERS },
     );
     const body = await resp.json();
     return Math.max(0, Number(body?.retry_after ?? 0));
