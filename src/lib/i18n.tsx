@@ -64,7 +64,7 @@ const STRINGS = {
     vote_cta: 'Votar para elevar a Vaquita Comunitaria',
     vote_cooldown: 'Próximo voto en {t}',
     vote_note:
-      'El voto es una transacción testnet firmada por tu wallet (1 cada 5 min). En producción se exigirá KYC o antigüedad contra Sybil.',
+      'Tu cuenta de Stellar Testnet debe tener al menos 24 horas para votar (1 voto cada 5 min). Firmar y confirmar la transacción en Stellar no garantiza que VACA registre el voto; el servidor verifica la elegibilidad.',
     vote_view_tx: 'Ver tu voto en la cadena',
     d1_profile: 'Perfil D1 · Testnet',
     d1_profile_a: 'A · original (predeterminado)',
@@ -205,7 +205,7 @@ const STRINGS = {
     vote_cta: 'Vote to elevate to Community Vaquita',
     vote_cooldown: 'Next vote in {t}',
     vote_note:
-      'Your vote is a testnet transaction signed by your wallet (1 every 5 min). Production will require KYC or wallet age against Sybil attacks.',
+      'Your Stellar Testnet account must be at least 24 hours old to vote (1 vote every 5 min). Signing and confirming the Stellar transaction does not guarantee VACA records the vote; the server verifies eligibility.',
     vote_view_tx: 'View your vote on-chain',
     d1_profile: 'D1 profile · Testnet',
     d1_profile_a: 'A · original (default)',

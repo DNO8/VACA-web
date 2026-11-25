@@ -9,7 +9,6 @@ import {
   Users,
   Wallet,
   Loader2,
-  ExternalLink,
 } from 'lucide-react';
 import { requestAccess, isConnected } from '@stellar/freighter-api';
 import {
@@ -18,9 +17,10 @@ import {
   VAQUITA_GOLD,
 } from '@/lib/vaquitas';
 import { getBalance } from '@/lib/donate';
-import { castVote, getVoteCooldown, VoteError } from '@/lib/vote';
+import { castVote, getVoteCooldown, VoteError, type VoteFeedbackState } from '@/lib/vote';
 import { useLang, type StrKey } from '@/lib/i18n';
 import D1DonationSection from './D1DonationSection';
+import VoteFeedback from './VoteFeedback';
 
 interface VaquitaAsideProps {
   incident: VaquitaIncident;
@@ -61,7 +61,7 @@ export default function VaquitaAside({
   const [donationBusy, setDonationBusy] = useState(false);
   const [error, setError] = useState('');
   const [cooldown, setCooldown] = useState(0);
-  const [voteTx, setVoteTx] = useState<string | null>(null);
+  const [voteFeedback, setVoteFeedback] = useState<(VoteFeedbackState & { incidentId: string; wallet: string }) | null>(null);
 
   const color = CATEGORY_COLOR[incident.category] ?? '#A6C2D4';
   const promoted = incident.donationStatus !== 'signal';
@@ -92,6 +92,7 @@ export default function VaquitaAside({
     if (!addr) return;
     setBusy('vote');
     setError('');
+    setVoteFeedback(null);
     try {
       const result = await castVote(supabaseUrl, addr, incident.id);
       onVote(incident.id, {
@@ -99,13 +100,19 @@ export default function VaquitaAside({
         donationStatus: result.donationStatus,
       });
       setCooldown(result.cooldownS);
-      setVoteTx(result.explorerUrl);
+      setVoteFeedback({ accepted: true, txHash: result.txHash, incidentId: incident.id, wallet: addr });
     } catch (e: any) {
+      setVoteFeedback({
+        accepted: false, incidentId: incident.id, wallet: addr,
+        message: e?.message ?? t('err_vote'),
+        ...(e instanceof VoteError ? {
+          code: e.code, eligibleAt: e.eligibleAt, minAgeSeconds: e.minAgeSeconds,
+          ageRetryAtMs: e.ageRetryAtMs, txHash: e.txHash,
+        } : {}),
+      });
       if (e instanceof VoteError && e.retryAfter != null) {
-        // El cooldown es estado, no error — lo muestra el contador.
+        // Only the existing voting cooldown uses the countdown.
         setCooldown(e.retryAfter);
-      } else {
-        setError(e?.message ?? t('err_vote'));
       }
     } finally {
       setBusy(null);
@@ -233,16 +240,7 @@ export default function VaquitaAside({
           <p className="mt-1.5 text-[10px] leading-snug text-[var(--text-muted)]">
             {t('vote_note')}
           </p>
-          {voteTx && (
-            <a
-              href={voteTx}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-1.5 flex items-center gap-1 text-[11px] text-[var(--cyan-primary)] hover:underline"
-            >
-              <ExternalLink size={11} /> {t('vote_view_tx')}
-            </a>
-          )}
+          <VoteFeedback lang={lang} feedback={voteFeedback?.incidentId === incident.id && voteFeedback.wallet === wallet ? voteFeedback : null} />
         </div>
 
         {/* Donación */}

@@ -24,12 +24,38 @@ export interface VoteResult {
   explorerUrl: string;
 }
 
+export interface VoteFailureDetails {
+  code?: string;
+  eligibleAt?: string;
+  minAgeSeconds?: number;
+  /** Absolute fallback deadline derived once from the server's age retry_after. */
+  ageRetryAtMs?: number;
+  txHash?: string;
+}
+
+export interface VoteFeedbackState extends VoteFailureDetails {
+  accepted: boolean;
+  message?: string;
+}
+
 export class VoteError extends Error {
+  readonly code?: string;
+  readonly eligibleAt?: string;
+  readonly minAgeSeconds?: number;
+  readonly ageRetryAtMs?: number;
+  readonly txHash?: string;
+
   constructor(
     message: string,
     public readonly retryAfter?: number,
+    details: VoteFailureDetails = {},
   ) {
     super(message);
+    this.code = details.code;
+    this.eligibleAt = details.eligibleAt;
+    this.minAgeSeconds = details.minAgeSeconds;
+    this.ageRetryAtMs = details.ageRetryAtMs;
+    this.txHash = details.txHash;
   }
 }
 
@@ -68,31 +94,56 @@ export async function castVote(
   const submitted = await srv.submitTransaction(signed);
   const txHash = submitted.hash;
 
-  const resp = await fetch(`${supabaseUrl}${VOTE_ENDPOINT}`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(SUPABASE_ANON_KEY ? { apikey: SUPABASE_ANON_KEY } : {}),
-    },
-    body: JSON.stringify({
-      incident_id: incidentId,
-      public_key: voterPublicKey,
-      tx_hash: txHash,
-    }),
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(`${supabaseUrl}${VOTE_ENDPOINT}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(SUPABASE_ANON_KEY ? { apikey: SUPABASE_ANON_KEY } : {}),
+      },
+      body: JSON.stringify({
+        incident_id: incidentId,
+        public_key: voterPublicKey,
+        tx_hash: txHash,
+      }),
+    });
+  } catch {
+    // Submission already succeeded; a missing API response must not lose its proof.
+    throw new VoteError('No se pudo confirmar el registro del voto', undefined, {
+      code: 'registration_unconfirmed', txHash,
+    });
+  }
   const body = await resp.json().catch(() => ({}));
+  const ageRetryAtMs = body?.error === 'wallet_too_new' && Number.isSafeInteger(body?.retry_after) && body.retry_after >= 0
+    ? Date.now() + body.retry_after * 1000 : undefined;
+  const details: VoteFailureDetails = {
+    code: typeof body?.error === 'string' ? body.error : 'registration_unconfirmed',
+    eligibleAt: typeof body?.eligible_at === 'string' ? body.eligible_at : undefined,
+    minAgeSeconds: typeof body?.min_age_s === 'number' ? body.min_age_s : undefined,
+    ageRetryAtMs: typeof ageRetryAtMs === 'number' && Number.isSafeInteger(ageRetryAtMs) && ageRetryAtMs <= 8.64e15 ? ageRetryAtMs : undefined,
+    txHash,
+  };
 
   if (resp.status === 429) {
     throw new VoteError(
       `Puedes votar de nuevo en ${body?.retry_after ?? '?'} s`,
       body?.retry_after,
+      { ...details, code: 'cooldown' },
     );
   }
   if (resp.status === 409) {
-    throw new VoteError('Ya votaste esta señal');
+    throw new VoteError('Ya votaste esta señal', undefined, { ...details, code: 'already_voted' });
   }
   if (!resp.ok) {
-    throw new VoteError(body?.error ?? 'No se pudo registrar el voto');
+    // Age eligibility is not the five-minute voting cooldown.
+    throw new VoteError(body?.error ?? 'No se pudo registrar el voto', undefined, details);
+  }
+
+  if (body?.ok !== true || !Number.isSafeInteger(body?.votes) || body.votes < 0) {
+    throw new VoteError('No se pudo confirmar el registro del voto', undefined, {
+      code: 'registration_unconfirmed', txHash,
+    });
   }
 
   return {
