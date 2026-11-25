@@ -15,7 +15,7 @@ import { fundIfMissing } from './donate';
 const VOTE_ENDPOINT = '/functions/v1/vaquita-vote';
 const VOTE_DATA_NAME = 'vq-vote';
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
-// The JWT-protected gateway needs the public anon JWT, never a service-role key.
+// Use the configured public client key; never expose a service-role key.
 const VOTE_HEADERS: Record<string, string> = SUPABASE_ANON_KEY
   ? { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` } : {};
 
