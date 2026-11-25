@@ -106,7 +106,7 @@ export default function VaquitaAside({
         accepted: false, incidentId: incident.id, wallet: addr,
         message: e?.message ?? t('err_vote'),
         ...(e instanceof VoteError ? {
-          code: e.code, eligibleAt: e.eligibleAt, minAgeSeconds: e.minAgeSeconds,
+          stage: e.stage, code: e.code, eligibleAt: e.eligibleAt, minAgeSeconds: e.minAgeSeconds,
           ageRetryAtMs: e.ageRetryAtMs, txHash: e.txHash,
         } : {}),
       });

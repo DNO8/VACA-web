@@ -18,9 +18,11 @@ The remaining duration uses the server's timezone-qualified `eligible_at`. If th
 
 ## Scope and limitations
 
-This change does not alter the backend's 24-hour rule, vote weight, promotion threshold, authentication, or transaction submission. The requirement is explained before voting, but age verification still happens in the server's registration flow after the Stellar proof. The current public GET exposes cooldown only; this change does not invent a preflight eligibility contract or copy security policy into a second client validator.
+Before any funding, account load, signature or transaction submission, the web requests `GET /functions/v1/vaquita-vote?voter=<encoded-public-key>&check=wallet_age` with caching disabled. Only HTTP 200 with the explicit boolean `wallet_age_eligible: true` opens the transaction flow. HTTP 403 `wallet_too_new` displays the existing date/countdown and explicitly says no transaction was signed or submitted and no XLM was spent on this attempt. Unavailable age, authentication/network failures, a 12-second timeout, malformed JSON or a legacy cooldown-only response all stop before signing.
 
-No automatic retry, vote replay, payment, or backend deployment is added. A future pre-signing eligibility check requires a separately defined read-only contract.
+The server must implement this additive read-only contract before the web is deployed. The legacy GET without `check=wallet_age` still means cooldown only; it never clears account age. The preflight does not reserve a vote or guarantee acceptance. Final POST validation, the 24-hour rule, vote weight, promotion threshold, authentication, duplicate/cooldown checks and post-submission proof handling remain authoritative and unchanged. Errors after submission may still have a transaction fee and confirmed link; the no-transaction statement is restricted to the explicit preflight stage.
+
+No automatic retry, vote replay, payment, wallet creation, or backend deployment is added by this change. An absent or unverifiable account is not automatically funded by a rejected preflight; the shared donation/funding helper is unchanged. Deploying only the web against an older backend deliberately blocks voting rather than guessing eligibility.
 
 ## Local checks
 

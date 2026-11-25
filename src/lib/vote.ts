@@ -25,6 +25,7 @@ export interface VoteResult {
 }
 
 export interface VoteFailureDetails {
+  stage?: 'preflight';
   code?: string;
   eligibleAt?: string;
   minAgeSeconds?: number;
@@ -39,6 +40,7 @@ export interface VoteFeedbackState extends VoteFailureDetails {
 }
 
 export class VoteError extends Error {
+  readonly stage?: 'preflight';
   readonly code?: string;
   readonly eligibleAt?: string;
   readonly minAgeSeconds?: number;
@@ -51,6 +53,7 @@ export class VoteError extends Error {
     details: VoteFailureDetails = {},
   ) {
     super(message);
+    this.stage = details.stage;
     this.code = details.code;
     this.eligibleAt = details.eligibleAt;
     this.minAgeSeconds = details.minAgeSeconds;
@@ -59,15 +62,48 @@ export class VoteError extends Error {
   }
 }
 
+/** Read-only gate. A missing/legacy response must never authorize signing. */
+async function requireWalletAge(supabaseUrl: string, voterPublicKey: string): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(
+      `${supabaseUrl}${VOTE_ENDPOINT}?voter=${encodeURIComponent(voterPublicKey)}&check=wallet_age`,
+      { method: 'GET', cache: 'no-store', signal: controller.signal,
+        headers: SUPABASE_ANON_KEY ? { apikey: SUPABASE_ANON_KEY } : {} },
+    );
+    const body = await response.json();
+    if (response.status === 200 && body?.wallet_age_eligible === true) return;
+    if (response.status === 403 && body?.error === 'wallet_too_new') {
+      const deadline = Number.isSafeInteger(body.retry_after) && body.retry_after >= 0
+        ? Date.now() + body.retry_after * 1000 : undefined;
+      throw new VoteError('wallet_too_new', undefined, {
+        stage: 'preflight', code: 'wallet_too_new',
+        eligibleAt: typeof body.eligible_at === 'string' ? body.eligible_at : undefined,
+        minAgeSeconds: typeof body.min_age_s === 'number' ? body.min_age_s : undefined,
+        ageRetryAtMs: typeof deadline === 'number' && Number.isSafeInteger(deadline) && deadline <= 8.64e15 ? deadline : undefined,
+      });
+    }
+  } catch (error) {
+    if (error instanceof VoteError) throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+  throw new VoteError('No se pudo verificar la antigüedad antes de firmar', undefined, {
+    stage: 'preflight', code: 'wallet_age_unavailable',
+  });
+}
+
 /**
- * Emite el voto: tx manageData firmada por el votante → Horizon → hash como
- * prueba al backend. El ballot queda público en el ledger de testnet.
+ * Comprueba antigüedad sin efectos → firma manageData → Horizon → registro.
+ * El backend vuelve a validar la prueba y la antigüedad antes de aceptar.
  */
 export async function castVote(
   supabaseUrl: string,
   voterPublicKey: string,
   incidentId: string,
 ): Promise<VoteResult> {
+  await requireWalletAge(supabaseUrl, voterPublicKey);
   const srv = getServer();
   await fundIfMissing(voterPublicKey);
   const source = await srv.loadAccount(voterPublicKey);

@@ -94,6 +94,9 @@ export default function VoteFeedback({ lang, feedback }: { lang: Lang; feedback:
       <div role="status" aria-live="polite" aria-atomic="true" className="space-y-2">
         <p className="font-semibold text-[var(--text-heading)]">{title}</p>
         {detail && <p>{detail}</p>}
+        {feedback.stage === 'preflight' && !feedback.accepted && !hash && <p>{es
+          ? 'No se firmó ni se envió una transacción. No se gastó XLM en este intento.'
+          : 'No transaction was signed or submitted. No XLM was spent on this attempt.'}</p>}
         {feedback.code === 'wallet_too_new' && eligible && (
           <p>{es ? 'Podrás votar desde: ' : 'You can vote from: '}
             <time dateTime={eligible}>{new Intl.DateTimeFormat(es ? 'es-CL' : 'en-US', {

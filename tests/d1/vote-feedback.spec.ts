@@ -21,7 +21,8 @@ function load(relative: string, stubs: Record<string, unknown> = {}, fetcher: ty
   );
   return exports;
 }
-function client(status: number, body: unknown, networkFailure = false) {
+function client(status: number, body: unknown, networkFailure = false,
+  preflight: Response | Error = Response.json({ wallet_age_eligible: true })) {
   const calls: string[] = [];
   class Builder {
     addOperation() { return this; }
@@ -32,9 +33,19 @@ function client(status: number, body: unknown, networkFailure = false) {
   const api = load('../../src/lib/vote.ts', {
     '@stellar/stellar-sdk': { TransactionBuilder: Builder, Operation: { manageData: () => ({}) }, BASE_FEE: '100' },
     '@stellar/freighter-api': { signTransaction: async () => { calls.push('sign'); return { signedTxXdr: 'signed-fixture' }; } },
-    './stellar': { NETWORK: 'Testnet fixture', getServer: () => ({ loadAccount: async () => ({}), submitTransaction: async () => { calls.push('submit'); return { hash }; } }) },
-    './donate': { fundIfMissing: async () => {} },
-  }, (async (_url: string, init?: RequestInit) => {
+    './stellar': { NETWORK: 'Testnet fixture', getServer: () => { calls.push('server'); return { loadAccount: async () => { calls.push('load'); return {}; }, submitTransaction: async () => { calls.push('submit'); return { hash }; } }; } },
+    './donate': { fundIfMissing: async () => { calls.push('fund'); } },
+  }, (async (url: string, init?: RequestInit) => {
+    if (init?.method === 'GET') {
+      calls.push('preflight');
+      expect(new URL(url).searchParams.get('voter')).toBe('public-wallet');
+      expect(new URL(url).searchParams.get('check')).toBe('wallet_age');
+      expect(init.cache).toBe('no-store');
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+      expect(init.headers).toEqual({ apikey: 'test-public-key' });
+      if (preflight instanceof Error) throw preflight;
+      return preflight;
+    }
     calls.push('register');
     expect(JSON.parse(String(init?.body))).toEqual({ incident_id: 'incident:full', public_key: 'public-wallet', tx_hash: hash });
     if (networkFailure) throw new TypeError('Network unavailable');
@@ -42,6 +53,61 @@ function client(status: number, body: unknown, networkFailure = false) {
   }) as typeof fetch);
   return Object.assign(api, { calls });
 }
+
+const submittedCalls = ['preflight', 'server', 'fund', 'load', 'sign', 'submit', 'register'];
+
+test('preflight stops a young wallet before every transaction side effect', async () => {
+  const api = client(200, { ok: true, votes: 20 }, false,
+    Response.json({ error: 'wallet_too_new', min_age_s: 86400, eligible_at: eligibleAt, retry_after: 12300 }, { status: 403 }));
+  const before = Date.now();
+  const error = await api.castVote('https://example.invalid', 'public-wallet', 'incident:full').catch((e: Error) => e);
+  expect(error).toBeInstanceOf(api.VoteError);
+  expect(error.stage).toBe('preflight'); expect(error.code).toBe('wallet_too_new');
+  expect(error.eligibleAt).toBe(eligibleAt); expect(error.minAgeSeconds).toBe(86400);
+  expect(error.ageRetryAtMs).toBeGreaterThanOrEqual(before + 12300000);
+  expect(error.ageRetryAtMs).toBeLessThanOrEqual(Date.now() + 12300000);
+  expect(error.retryAfter).toBeUndefined(); expect(error.txHash).toBeUndefined();
+  expect(api.calls).toEqual(['preflight']);
+});
+
+test('preflight fails closed on unavailable, unauthorized, malformed and legacy responses', async () => {
+  for (const response of [
+    Response.json({ error: 'wallet_age_unavailable' }, { status: 503 }),
+    Response.json({ error: 'unauthorized' }, { status: 401 }),
+    Response.json({ retry_after: 0, cooldown_s: 300 }),
+    Response.json({ wallet_age_eligible: 'true' }),
+    Response.json({ wallet_age_eligible: true }, { status: 503 }),
+    new Response('not JSON'), new Response(null, { status: 204 }),
+    new TypeError('Network unavailable'), new DOMException('Timed out', 'AbortError'),
+  ]) {
+    const api = client(200, { ok: true, votes: 20 }, false, response);
+    const error = await api.castVote('https://example.invalid', 'public-wallet', 'incident:full').catch((e: Error) => e);
+    expect(error).toBeInstanceOf(api.VoteError);
+    expect(error.stage).toBe('preflight'); expect(error.code).toBe('wallet_age_unavailable');
+    expect(error.txHash).toBeUndefined(); expect(error.retryAfter).toBeUndefined();
+    expect(api.calls).toEqual(['preflight']);
+  }
+});
+
+test('preflight success precedes signing and does not replace final registration', async () => {
+  const api = client(200, { ok: true, votes: 20 });
+  await expect(api.castVote('https://example.invalid', 'public-wallet', 'incident:full')).resolves.toMatchObject({ votes: 20, txHash: hash });
+  expect(api.calls).toEqual(submittedCalls);
+});
+
+test('pre-sign feedback says no transaction and never displays Stellar proof', () => {
+  const View = load('../../src/components/VoteFeedback.tsx').default;
+  for (const lang of ['es', 'en']) {
+    for (const code of ['wallet_too_new', 'wallet_age_unavailable']) {
+      const html = renderToStaticMarkup(createElement(View, { lang, feedback: {
+        accepted: false, stage: 'preflight', code, eligibleAt, minAgeSeconds: 86400,
+      } }));
+      expect(html).toContain(lang === 'es' ? 'No se firmó ni se envió una transacción.' : 'No transaction was signed or submitted.');
+      expect(html).toContain('role="status"'); expect(html).not.toContain('href=');
+      expect(html).not.toContain(lang === 'es' ? 'Transacción confirmada' : 'Transaction confirmed');
+    }
+  }
+});
 
 test('age rejection retains eligibility and the confirmed Stellar hash, not a cooldown', async () => {
   const api = client(403, { error: 'wallet_too_new', min_age_s: 86400, retry_after: 83110, eligible_at: eligibleAt });
@@ -52,7 +118,7 @@ test('age rejection retains eligibility and the confirmed Stellar hash, not a co
   expect(error.minAgeSeconds).toBe(86400);
   expect(error.txHash).toBe(hash);
   expect(error.retryAfter).toBeUndefined();
-  expect(api.calls).toEqual(['sign', 'submit', 'register']);
+  expect(api.calls).toEqual(submittedCalls);
 });
 
 test('age retry_after is anchored once and never becomes the voting cooldown', async () => {
@@ -62,7 +128,7 @@ test('age retry_after is anchored once and never becomes the voting cooldown', a
   expect(error.ageRetryAtMs).toBeGreaterThanOrEqual(before + 12300000);
   expect(error.ageRetryAtMs).toBeLessThanOrEqual(Date.now() + 12300000);
   expect(error.retryAfter).toBeUndefined();
-  expect(api.calls).toEqual(['sign', 'submit', 'register']);
+  expect(api.calls).toEqual(submittedCalls);
   for (const retry_after of [undefined, -1, '12300', 1.5]) {
     const invalid = client(403, { error: 'wallet_too_new', retry_after });
     const result = await invalid.castVote('https://example.invalid', 'public-wallet', 'incident:full').catch((e: Error) => e);
@@ -79,7 +145,7 @@ test('unavailable age and lost registration response retain proof without report
     expect(error.code).toBe(networkFailure ? 'registration_unconfirmed' : 'wallet_age_unavailable');
     expect(error.txHash).toBe(hash);
     expect(error.retryAfter).toBeUndefined();
-    expect(api.calls).toEqual(['sign', 'submit', 'register']);
+    expect(api.calls).toEqual(submittedCalls);
   }
 });
 
@@ -89,7 +155,7 @@ test('a successful HTTP response without an accepted vote remains unconfirmed', 
   expect(error).toBeInstanceOf(api.VoteError);
   expect(error.code).toBe('registration_unconfirmed');
   expect(error.txHash).toBe(hash);
-  expect(api.calls).toEqual(['sign', 'submit', 'register']);
+  expect(api.calls).toEqual(submittedCalls);
 });
 
 test('existing accepted vote, duplicate and cooldown behavior are preserved', async () => {
@@ -105,7 +171,7 @@ test('existing accepted vote, duplicate and cooldown behavior are preserved', as
     const api = client(status, body);
     const error = await api.castVote('https://example.invalid', 'public-wallet', 'incident:full').catch((e: Error) => e);
     expect(error.message).toBe(message); expect(error.retryAfter).toBe(retry);
-    expect(api.calls).toEqual(['sign', 'submit', 'register']);
+    expect(api.calls).toEqual(submittedCalls);
   }
 });
 
